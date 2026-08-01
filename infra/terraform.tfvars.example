@@ -1,0 +1,12 @@
+# Copy to terraform.tfvars (gitignored) and fill in for your deployment.
+
+# Apex domain you already own. The hosted zone is looked up by name, never
+# created - see the note in dns.tf.
+root_domain = "example.com"
+
+# Subdomain the kitchen display and PWA are served from.
+subdomain = "airhead"
+
+# Optional overrides:
+# project = "airhead"
+# region  = "us-east-1"

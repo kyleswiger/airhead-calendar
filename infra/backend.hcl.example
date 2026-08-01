@@ -1,0 +1,8 @@
+# Copy to backend.hcl (gitignored) and fill in for your deployment.
+#   terraform init -backend-config=backend.hcl
+
+bucket         = "YOUR-TFSTATE-BUCKET"
+key            = "airhead/terraform.tfstate"
+region         = "us-east-1"
+dynamodb_table = "terraform-locks"
+encrypt        = true

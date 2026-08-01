@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# Node
+node_modules/
+frontend/dist/
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+crash.log
+
+# Deployment-specific values and secrets - never commit.
+# Real values live in SSM Parameter Store / a private deployment profile.
+*.tfvars
+!*.tfvars.example
+backend.hcl
+!backend.hcl.example
+.env
+.env.*
+!.env.example
+*.pem
+*-credentials.json
+
+# OS / editor
+.DS_Store
+*.swp

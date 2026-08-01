@@ -1,0 +1,74 @@
+:root {
+  --bg: #12141a;
+  --fg: #f2f4f8;
+  --muted: #8b93a7;
+  --line: #262a35;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Kitchen display is read from ~8ft. 28px is the floor for anything that
+   carries meaning; the placeholder runs larger. */
+.shell {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1.5rem;
+  padding: clamp(1.5rem, 4vw, 4rem);
+}
+
+.clock {
+  font-size: clamp(4rem, 14vw, 11rem);
+  font-weight: 200;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.date {
+  font-size: clamp(1.25rem, 3.5vw, 2.25rem);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.rule {
+  height: 1px;
+  background: var(--line);
+}
+
+.brand {
+  font-size: clamp(1rem, 2.5vw, 1.75rem);
+  font-weight: 600;
+}
+
+.tagline {
+  font-size: clamp(0.875rem, 1.75vw, 1.125rem);
+  color: var(--muted);
+  max-width: 40ch;
+}
+
+.milestone {
+  font-size: clamp(0.75rem, 1.5vw, 1rem);
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, monospace;
+}
