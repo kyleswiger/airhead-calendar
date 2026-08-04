@@ -66,6 +66,38 @@ Then ship the site:
 Prerequisites: an AWS account, a domain registered in Route 53 with its hosted zone already
 present, and an S3 bucket + DynamoDB table for Terraform state.
 
+## M1: the control plane
+
+M1 adds the DynamoDB table, the `api` Lambda, and an API Gateway HTTP API. The Lambda ships
+as a zip built from source, so **build before you apply** — Terraform reads the package with
+`data "archive_file"`, which needs the build directory to exist at plan time.
+
+```bash
+./backend/build-lambda.sh     # → backend/build/api/  (gitignored)
+
+cd infra
+terraform init -backend-config=backend.hcl
+terraform apply
+```
+
+The build cross-compiles for `arm64` via pip's `--platform`, so it works from any machine —
+but if you change `architectures` on the Lambda, change `LAMBDA_ARCH` in the script to match
+or `pydantic-core` fails to import on the first request.
+
+The frontend reads the API host at **build** time, not runtime, so it needs the output baked
+in before `deploy.sh` runs:
+
+```bash
+export VITE_API_BASE=$(terraform -chdir=infra output -raw api_base_url)
+./deploy.sh
+```
+
+M1 uses the raw `execute-api` URL; a custom domain is a later milestone. CORS allows exactly
+`https://<subdomain>.<root_domain>`, so the API is not reachable from a page served anywhere
+else — including `localhost` during frontend development. Run the backend locally
+(`AIRHEAD_REPO_BACKEND=sqlite uvicorn airhead.api:app`) rather than pointing a dev server at
+the deployed API.
+
 ## Things that will bite you
 
 - **`project` must never change after the first apply.** It prefixes every resource name;
