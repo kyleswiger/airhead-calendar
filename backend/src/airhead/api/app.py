@@ -262,6 +262,18 @@ def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
+# API Gateway attaches the CORS response headers, but its $default route also
+# matches the browser's OPTIONS preflight and forwards it here - where every real
+# route is a GET/POST/PATCH/DELETE, so it 405s. A preflight has to answer 2xx or
+# the browser blocks the actual request, headers or no headers. Unauthenticated on
+# purpose: a preflight carries no credentials, so requiring the actor header would
+# reject every cross-origin call. The origin allowlist stays in Terraform, which is
+# the single place it belongs; this only declines to reject the question.
+@app.options("/{_path:path}", include_in_schema=False)
+def preflight(_path: str) -> Response:
+    return Response(status_code=204)
+
+
 # Authenticated, but the roster itself is not visibility-restricted.
 @app.get("/api/members", response_model=MembersResponse, dependencies=[Depends(get_actor)])
 def list_members(members: Members, household_id: HouseholdId) -> MembersResponse:

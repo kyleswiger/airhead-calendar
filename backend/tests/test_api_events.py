@@ -245,3 +245,27 @@ class TestDelete:
         assert (
             client.delete("/api/events/evt_nope", headers=as_member("mem_alex")).status_code == 404
         )
+
+
+class TestPreflight:
+    """API Gateway's $default route hands the browser's OPTIONS preflight to the
+    app. If it 405s, every cross-origin request from the kitchen display fails -
+    and it fails only in a browser, so nothing else in this suite would catch it."""
+
+    def test_preflight_is_not_rejected(self, seeded):
+        client, _, _ = seeded
+        r = client.options(
+            "/api/agenda",
+            headers={
+                "Origin": "https://airhead.example.com",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "x-airhead-member",
+            },
+        )
+        assert r.status_code == 204
+
+    def test_preflight_needs_no_actor_header(self, seeded):
+        """A preflight carries no credentials, so requiring the shim would reject
+        every cross-origin call before the real request was ever made."""
+        client, _, _ = seeded
+        assert client.options("/api/events/evt_soccer").status_code == 204
