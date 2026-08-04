@@ -11,8 +11,15 @@ Base path: `/api`. All JSON, `camelCase` on the wire, `snake_case` in Python.
   sent *additionally* as a floating local string, already converted server-side. The kiosk
   does no timezone math — the household timezone is a server concern and a Pi in a kitchen
   is exactly where a browser-side DST bug would go unnoticed for six months.
-- **All-day events carry `"allDay": true` and a plain `date`,** never a midnight instant.
-  That conversion is the classic off-by-one-day bug and it is the adapter's job to avoid it.
+- **All-day events carry `"allDay": true`, and their `startLocal` / `endLocal` are bare
+  dates** (`"2026-08-10"`), never midnight instants. **`endLocal` is inclusive** — the last
+  day the event covers, so a one-day event has `startLocal == endLocal`. An exclusive
+  next-midnight end on the wire is the classic off-by-one-day bug; we do not send one, and a
+  client must not "correct" for one. Consumers branch on `allDay` rather than assuming a
+  single format.
+- **All-day events are stored floating**, i.e. the date is read off the clock face of
+  `startUtc` without a zone conversion. Adapters must follow suit: converting an all-day
+  event *through* a timezone is what lands it a day off, and it does so silently.
 - **The caller never asks for a visibility level.** The server derives it from the
   authenticated member. A minor's session cannot request `adults` events by any parameter.
 - Unknown fields on a response are additive; the display must ignore what it doesn't know.
@@ -89,8 +96,15 @@ work, which is information).
 - `GET /api/events/{eventId}` → `200` / `404`. A tombstoned or invisible event returns
   `404`, never `403` — a distinguishable "exists but you can't see it" is itself a leak.
 - `PATCH /api/events/{eventId}` → `200`. Partial. Setting `tier` through this route stamps
-  `tierSource: "human"`, which no later sync may overwrite.
+  `tierSource: "human"`, which no later sync may overwrite. **`POST` with an explicit `tier`
+  stamps `human` too** — a tier a person typed is a human tier, and if it were recorded as
+  `auto` the first sync would quietly "correct" it back.
 - `DELETE /api/events/{eventId}` → `204`. Soft delete.
+
+Request and response deliberately differ on one field: a body sends **`involves`** (who else
+this constrains), a row returns **`memberIds`** (owner + involves, deduped, ordered to match
+the roster order in `members`). The response field is the resolved set, so a client can render
+it directly; the request field is what a human actually knows.
 
 Create/patch body (all optional on PATCH):
 
