@@ -39,6 +39,11 @@ class SourceKind(StrEnum):
     ICS = "ics"
 
 
+class MemberRole(StrEnum):
+    ADULT = "adult"
+    MINOR = "minor"
+
+
 # Which source wins when a merge group picks its canonical record. Lower is better.
 SOURCE_PRIORITY: dict[SourceKind, int] = {
     SourceKind.NATIVE: 0,
@@ -55,6 +60,37 @@ class EventSource:
     source_id: str | None = None
     external_id: str | None = None
     etag: str | None = None
+
+
+@dataclass(slots=True)
+class Member:
+    member_id: str
+    household_id: str
+    display_name: str
+    role: MemberRole
+    color: str  # Never the only carrier of identity - the name label is always shown too.
+    cognito_sub: str | None = None
+
+    @property
+    def is_adult(self) -> bool:
+        return self.role is MemberRole.ADULT
+
+    def visibility_scope(self) -> Visibility:
+        """The widest visibility this member is ever allowed to see."""
+        return Visibility.ADULTS if self.is_adult else Visibility.ALL
+
+
+@dataclass(slots=True)
+class Source:
+    source_id: str
+    household_id: str
+    kind: SourceKind
+    owner_member_id: str
+    label: str
+    default_tier: Tier | None = None  # e.g. a calendar connected as "work" defaults to T3.
+    cursor: str | None = None  # syncToken / ctag / ETag, opaque to everything but the adapter.
+    last_sync_at: datetime | None = None
+    enabled: bool = True
 
 
 @dataclass(slots=True)
@@ -77,8 +113,16 @@ class Event:
     visibility: Visibility = Visibility.ALL
     merge_group_id: str | None = None
     recurrence_parent_id: str | None = None
+    recurrence_id: str | None = None  # Original start of the instance this override replaces.
     created_by: str | None = None
     updated_at: datetime | None = None
+    # Soft delete only. Source records are immutable truth and an unmerge or an
+    # "actually, put that back" has to stay possible; a tombstone is swept after 30 days.
+    deleted_at: datetime | None = None
+
+    @property
+    def is_deleted(self) -> bool:
+        return self.deleted_at is not None
 
     def content_hash(self) -> str:
         """Fingerprint of the fields a remote source owns.
