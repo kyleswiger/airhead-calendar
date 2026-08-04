@@ -1,0 +1,409 @@
+{
+  "range": {
+    "start": "2026-08-04",
+    "end": "2026-08-10",
+    "tz": "America/New_York"
+  },
+  "members": [
+    {
+      "memberId": "mem_alex",
+      "displayName": "Alex",
+      "role": "adult",
+      "color": "#7aa2f7"
+    },
+    {
+      "memberId": "mem_sam",
+      "displayName": "Sam",
+      "role": "adult",
+      "color": "#9ece6a"
+    },
+    {
+      "memberId": "mem_riley",
+      "displayName": "Riley",
+      "role": "minor",
+      "color": "#f7768e"
+    }
+  ],
+  "days": [
+    {
+      "date": "2026-08-04",
+      "rows": [
+        {
+          "kind": "busy",
+          "memberId": "mem_alex",
+          "startLocal": "2026-08-04T09:00:00",
+          "endLocal": "2026-08-04T15:00:00",
+          "count": 5,
+          "eventIds": [
+            "evt_w01",
+            "evt_w02",
+            "evt_w03",
+            "evt_w04",
+            "evt_w05"
+          ]
+        },
+        {
+          "kind": "event",
+          "eventId": "evt_dentist",
+          "title": "Dentist",
+          "startLocal": "2026-08-04T09:30:00",
+          "endLocal": "2026-08-04T10:15:00",
+          "startUtc": "2026-08-04T13:30:00Z",
+          "allDay": false,
+          "tier": "T1",
+          "tierSource": "auto",
+          "ownerMemberId": "mem_sam",
+          "memberIds": [
+            "mem_sam"
+          ],
+          "location": "Dr. Nguyen — Elm St",
+          "visibility": "all",
+          "isFamily": false
+        },
+        {
+          "kind": "event",
+          "eventId": "evt_soccer_practice",
+          "title": "Soccer practice",
+          "startLocal": "2026-08-04T16:00:00",
+          "endLocal": "2026-08-04T17:30:00",
+          "startUtc": "2026-08-04T20:00:00Z",
+          "allDay": false,
+          "tier": "T1",
+          "tierSource": "auto",
+          "ownerMemberId": "mem_riley",
+          "memberIds": [
+            "mem_riley",
+            "mem_sam"
+          ],
+          "location": "Riverside Park Field 3",
+          "visibility": "all",
+          "isFamily": true,
+          "occurrenceId": "evt_soccer_practice@2026-08-04T20:00:00Z"
+        },
+        {
+          "kind": "event",
+          "eventId": "evt_dinner_nana",
+          "title": "Dinner at Nana's",
+          "startLocal": "2026-08-04T18:30:00",
+          "endLocal": "2026-08-04T20:30:00",
+          "startUtc": "2026-08-04T22:30:00Z",
+          "allDay": false,
+          "tier": "T1",
+          "tierSource": "human",
+          "ownerMemberId": "mem_sam",
+          "memberIds": [
+            "mem_alex",
+            "mem_sam",
+            "mem_riley"
+          ],
+          "visibility": "all",
+          "isFamily": true
+        }
+      ]
+    },
+    {
+      "date": "2026-08-05",
+      "rows": [
+        {
+          "kind": "busy",
+          "memberId": "mem_alex",
+          "startLocal": "2026-08-05T08:30:00",
+          "endLocal": "2026-08-05T16:00:00",
+          "count": 6,
+          "eventIds": [
+            "evt_w06",
+            "evt_w07",
+            "evt_w08",
+            "evt_w09",
+            "evt_w10",
+            "evt_w11"
+          ]
+        },
+        {
+          "kind": "event",
+          "eventId": "evt_picture_day",
+          "title": "School picture day",
+          "startLocal": "2026-08-05",
+          "endLocal": "2026-08-05",
+          "allDay": true,
+          "tier": "T1",
+          "tierSource": "auto",
+          "ownerMemberId": "mem_riley",
+          "memberIds": [
+            "mem_riley",
+            "mem_sam"
+          ],
+          "visibility": "all",
+          "isFamily": true
+        },
+        {
+          "kind": "event",
+          "eventId": "evt_haircut",
+          "title": "Haircut",
+          "startLocal": "2026-08-05T17:15:00",
+          "endLocal": "2026-08-05T18:00:00",
+          "startUtc": "2026-08-05T21:15:00Z",
+          "allDay": false,
+          "tier": "T2",
+          "tierSource": "auto",
+          "ownerMemberId": "mem_alex",
+          "memberIds": [
+            "mem_alex"
+          ],
+          "location": "Barber on 3rd",
+          "visibility": "all",
+          "isFamily": false
+        }
+      ]
+    },
+    {
+      "date": "2026-08-06",
+      "rows": [
+        {
+          "kind": "busy",
+          "memberId": "mem_alex",
+          "startLocal": "2026-08-06T09:00:00",
+          "endLocal": "2026-08-06T12:00:00",
+          "count": 2,
+          "eventIds": [
+            "evt_w12",
+            "evt_w13"
+          ]
+        },
+        {
+          "kind": "event",
+          "eventId": "evt_orthodontist",
+          "title": "Orthodontist — retainer check",
+          "startLocal": "2026-08-06T14:45:00",
+          "endLocal": "2026-08-06T15:30:00",
+          "startUtc": "2026-08-06T18:45:00Z",
+          "allDay": false,
+          "tier": "T1",
+          "tierSource": "auto",
+          "ownerMemberId": "mem_riley",
+          "memberIds": [
+            "mem_riley",
+            "mem_alex"
+          ],
+          "location": "Bridge St Orthodontics",
+          "visibility": "all",
+          "isFamily": true
+        },
+        {
+          "kind": "event",
+          "eventId": "evt_book_club",
+          "title": "Book club",
+          "startLocal": "2026-08-06T19:30:00",
+          "endLocal": "2026-08-06T21:00:00",
+          "startUtc": "2026-08-06T23:30:00Z",
+          "allDay": false,
+          "tier": "T2",
+          "tierSource": "human",
+          "ownerMemberId": "mem_sam",
+          "memberIds": [
+            "mem_sam"
+          ],
+          "visibility": "all",
+          "isFamily": false
+        }
+      ]
+    },
+    {
+      "date": "2026-08-07",
+      "rows": [
+        {
+          "kind": "busy",
+          "memberId": "mem_alex",
+          "startLocal": "2026-08-07T10:00:00",
+          "endLocal": "2026-08-07T17:00:00",
+          "count": 4,
+          "eventIds": [
+            "evt_w14",
+            "evt_w15",
+            "evt_w16",
+            "evt_w17"
+          ]
+        },
+        {
+          "kind": "event",
+          "eventId": "evt_flight_bos",
+          "title": "Flight to Boston",
+          "startLocal": "2026-08-07T06:10:00",
+          "endLocal": "2026-08-07T08:45:00",
+          "startUtc": "2026-08-07T10:10:00Z",
+          "allDay": false,
+          "tier": "T1",
+          "tierSource": "auto",
+          "ownerMemberId": "mem_alex",
+          "memberIds": [
+            "mem_alex",
+            "mem_sam"
+          ],
+          "location": "BWI → BOS · Sam driving",
+          "visibility": "all",
+          "isFamily": true
+        },
+        {
+          "kind": "event",
+          "eventId": "evt_flight_bwi",
+          "title": "Red-eye home from Boston",
+          "startLocal": "2026-08-07T21:40:00",
+          "endLocal": "2026-08-08T06:15:00",
+          "startUtc": "2026-08-08T01:40:00Z",
+          "allDay": false,
+          "tier": "T1",
+          "tierSource": "auto",
+          "ownerMemberId": "mem_alex",
+          "memberIds": [
+            "mem_alex",
+            "mem_sam"
+          ],
+          "location": "BOS → BWI · Sam picking up",
+          "visibility": "all",
+          "isFamily": true
+        }
+      ]
+    },
+    {
+      "date": "2026-08-08",
+      "rows": [
+        {
+          "kind": "event",
+          "eventId": "evt_flight_bwi",
+          "title": "Red-eye home from Boston",
+          "startLocal": "2026-08-07T21:40:00",
+          "endLocal": "2026-08-08T06:15:00",
+          "startUtc": "2026-08-08T01:40:00Z",
+          "allDay": false,
+          "tier": "T1",
+          "tierSource": "auto",
+          "ownerMemberId": "mem_alex",
+          "memberIds": [
+            "mem_alex",
+            "mem_sam"
+          ],
+          "location": "BOS → BWI · Sam picking up",
+          "visibility": "all",
+          "isFamily": true
+        }
+      ]
+    },
+    {
+      "date": "2026-08-09",
+      "rows": [
+        {
+          "kind": "event",
+          "eventId": "evt_nana_visit",
+          "title": "Nana visiting",
+          "startLocal": "2026-08-09",
+          "endLocal": "2026-08-10",
+          "allDay": true,
+          "tier": "T1",
+          "tierSource": "human",
+          "ownerMemberId": "mem_sam",
+          "memberIds": [
+            "mem_alex",
+            "mem_sam",
+            "mem_riley"
+          ],
+          "visibility": "all",
+          "isFamily": true
+        },
+        {
+          "kind": "event",
+          "eventId": "evt_soccer_game",
+          "title": "Soccer game vs. Eastside",
+          "startLocal": "2026-08-09T10:00:00",
+          "endLocal": "2026-08-09T11:30:00",
+          "startUtc": "2026-08-09T14:00:00Z",
+          "allDay": false,
+          "tier": "T1",
+          "tierSource": "auto",
+          "ownerMemberId": "mem_riley",
+          "memberIds": [
+            "mem_riley",
+            "mem_alex"
+          ],
+          "location": "Eastside Rec Complex",
+          "visibility": "all",
+          "isFamily": true
+        }
+      ]
+    },
+    {
+      "date": "2026-08-10",
+      "rows": [
+        {
+          "kind": "busy",
+          "memberId": "mem_alex",
+          "startLocal": "2026-08-10T08:00:00",
+          "endLocal": "2026-08-10T17:30:00",
+          "count": 7,
+          "eventIds": [
+            "evt_w18",
+            "evt_w19",
+            "evt_w20",
+            "evt_w21",
+            "evt_w22",
+            "evt_w23",
+            "evt_w24"
+          ]
+        },
+        {
+          "kind": "event",
+          "eventId": "evt_nana_visit",
+          "title": "Nana visiting",
+          "startLocal": "2026-08-09",
+          "endLocal": "2026-08-10",
+          "allDay": true,
+          "tier": "T1",
+          "tierSource": "human",
+          "ownerMemberId": "mem_sam",
+          "memberIds": [
+            "mem_alex",
+            "mem_sam",
+            "mem_riley"
+          ],
+          "visibility": "all",
+          "isFamily": true
+        },
+        {
+          "kind": "event",
+          "eventId": "evt_long_run",
+          "title": "Long run",
+          "startLocal": "2026-08-10T06:30:00",
+          "endLocal": "2026-08-10T08:00:00",
+          "startUtc": "2026-08-10T10:30:00Z",
+          "allDay": false,
+          "tier": "T2",
+          "tierSource": "auto",
+          "ownerMemberId": "mem_sam",
+          "memberIds": [
+            "mem_sam"
+          ],
+          "visibility": "all",
+          "isFamily": false
+        },
+        {
+          "kind": "event",
+          "eventId": "evt_pickup",
+          "title": "Pickup from camp",
+          "startLocal": "2026-08-10T16:30:00",
+          "endLocal": "2026-08-10T17:00:00",
+          "startUtc": "2026-08-10T20:30:00Z",
+          "allDay": false,
+          "tier": "T1",
+          "tierSource": "auto",
+          "ownerMemberId": "mem_sam",
+          "memberIds": [
+            "mem_sam",
+            "mem_riley"
+          ],
+          "location": "Camp Windermere",
+          "visibility": "all",
+          "isFamily": true
+        }
+      ]
+    }
+  ]
+}
