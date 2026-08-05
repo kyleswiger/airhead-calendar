@@ -99,3 +99,131 @@ resource "aws_iam_role_policy" "api_dynamodb" {
 # The api role has no ssm:GetParameter and no kms:Decrypt. It needs neither: the
 # Anthropic key belongs to the agent role and OAuth refresh tokens belong to the
 # sync role. Grant secrets on the role that uses them, never here for convenience.
+
+# --- M2: agent ---------------------------------------------------------------
+
+# The second role, built by copying the block above rather than widening it - which
+# is what the note at the top of this file promised and the only reason PRD §13's
+# split is real. Concretely: the api role still cannot read the Anthropic key, and
+# when M3 adds `sync`, that role will not be able to either.
+resource "aws_iam_role" "agent" {
+  name               = "${var.project}-agent"
+  description        = "Execution role for the ${var.project} agent Lambda (Anthropic tool loop)."
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
+}
+
+# Same reasoning as api_logs: no managed policy, no logs:CreateLogGroup, one group.
+data "aws_iam_policy_document" "agent_logs" {
+  statement {
+    sid       = "WriteOwnLogStreams"
+    effect    = "Allow"
+    actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+    resources = ["${aws_cloudwatch_log_group.agent.arn}:*"]
+  }
+}
+
+# THE STATEMENT THIS WHOLE FILE EXISTS FOR. Read the Resource before you edit it.
+#
+# It is a single parameter ARN. Not `ssm:*`, not `Resource = "*"`, and - the one that
+# looks harmless and is not - not `arn:aws:ssm:*:*:parameter/airhead/*`. A wildcard on
+# the project path reads as "this stack's own secrets" and is fine on the day it is
+# written, because the Anthropic key is the only parameter under it. M3 stores Google
+# OAuth refresh tokens under the same prefix, and on that day the path grant silently
+# becomes "the agent may read the household's calendar credentials" - with no diff on
+# this file, no failing test, and nothing in a plan to notice. PRD §13 asks for exactly
+# the opposite. Naming the parameter outright means a future secret is a deliberate
+# edit here, not an accident of prefix matching.
+#
+# GetParameter, singular: boto3's get_parameter() calls it, and GetParametersByPath is
+# a listing API - the one call that would enumerate the sync role's parameters.
+data "aws_iam_policy_document" "agent_secrets" {
+  statement {
+    sid       = "ReadAnthropicKey"
+    effect    = "Allow"
+    actions   = ["ssm:GetParameter"]
+    resources = [aws_ssm_parameter.anthropic_api_key.arn]
+  }
+
+  # SSM decrypts a SecureString with the caller's own KMS permissions, so without this
+  # GetParameter(WithDecryption=True) fails with AccessDenied naming KMS, not SSM.
+  #
+  # The encryption context condition is the belt to the key ARN's braces. SSM passes
+  # `PARAMETER_ARN = <the parameter's arn>` on every SecureString decrypt, so pinning
+  # it means this grant covers this parameter and nothing else - including the future
+  # parameters that will share this key. If the M3 tokens land on the same CMK, the
+  # agent still cannot decrypt them, because the context will not match.
+  statement {
+    sid       = "DecryptAnthropicKey"
+    effect    = "Allow"
+    actions   = ["kms:Decrypt"]
+    resources = [aws_kms_key.secrets.arn]
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:EncryptionContext:PARAMETER_ARN"
+      values   = [aws_ssm_parameter.anthropic_api_key.arn]
+    }
+  }
+}
+
+# Same table, same shape, same omissions as api_dynamodb - the agent's tools run
+# through the same repo layer, so it needs the same actions and no more. Notably it
+# also has no dynamodb:Scan: the agent is the caller most likely to be *asked* for
+# something that sounds like a scan ("what's on everyone's calendar this year"), and
+# the answer is a bounded Query per member, not a table read.
+#
+# It writes AgentTurn items (PRD §7, M2 contract "Audit log") to the same PK as the
+# rest of the household, so the audit log needs no separate grant - and could not be
+# given one, since IAM cannot scope DynamoDB by SK prefix.
+data "aws_iam_policy_document" "agent_dynamodb" {
+  statement {
+    sid    = "TableItemAccess"
+    effect = "Allow"
+    actions = [
+      "dynamodb:DeleteItem",
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:Query",
+      "dynamodb:UpdateItem",
+      "dynamodb:DescribeTable",
+      "dynamodb:ConditionCheckItem",
+      "dynamodb:TransactGetItems",
+      "dynamodb:TransactWriteItems",
+    ]
+    resources = [aws_dynamodb_table.airhead.arn]
+  }
+
+  # GSI1 (source/external id) and GSI2 (member/day). The agent reads GSI2 on every
+  # get_agenda and find_conflicts call; GSI1 is here because merge_events resolves
+  # provider identities. Query only - index writes do not exist.
+  statement {
+    sid       = "IndexQueryAccess"
+    effect    = "Allow"
+    actions   = ["dynamodb:Query"]
+    resources = ["${aws_dynamodb_table.airhead.arn}/index/*"]
+  }
+}
+
+resource "aws_iam_role_policy" "agent_logs" {
+  name   = "logs"
+  role   = aws_iam_role.agent.id
+  policy = data.aws_iam_policy_document.agent_logs.json
+}
+
+resource "aws_iam_role_policy" "agent_dynamodb" {
+  name   = "dynamodb"
+  role   = aws_iam_role.agent.id
+  policy = data.aws_iam_policy_document.agent_dynamodb.json
+}
+
+resource "aws_iam_role_policy" "agent_secrets" {
+  name   = "secrets"
+  role   = aws_iam_role.agent.id
+  policy = data.aws_iam_policy_document.agent_secrets.json
+}
+
+# The agent role has no route to an OAuth refresh token: no ssm:GetParameter beyond
+# the one ARN above, no ssm:GetParametersByPath to discover others, and a kms:Decrypt
+# that only unlocks one encryption context. That is the half of PRD §13 M2 can prove.
+# The other half - the sync role not reaching the Anthropic key - is M3's to keep, and
+# it stays true as long as its policy names its own parameters the same way.

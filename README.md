@@ -98,6 +98,44 @@ else — including `localhost` during frontend development. Run the backend loca
 (`AIRHEAD_REPO_BACKEND=sqlite uvicorn airhead.api:app`) rather than pointing a dev server at
 the deployed API.
 
+## M2: the agent
+
+M2 adds a second Lambda (`airhead-agent`), the `POST /api/agent/turn` route in front of
+it, a KMS key, and an SSM `SecureString` parameter holding the Anthropic API key.
+
+**The key is not in Terraform.** Terraform creates the parameter with a placeholder and
+then stops looking at the value (`ignore_changes`), so the real key never enters a plan,
+a `.tfvars`, or the state file. You put it there once, by hand, after the first apply:
+
+```bash
+cd infra
+terraform apply
+
+aws ssm put-parameter \
+  --name "$(terraform output -raw anthropic_api_key_parameter_name)" \
+  --key-id "$(terraform output -raw secrets_kms_key_id)" \
+  --type SecureString --overwrite \
+  --value "sk-ant-..."
+```
+
+Pass `--key-id`. `--overwrite` without it can land the value under a different key than
+the agent role is allowed to decrypt, and the first turn then fails with an AccessDenied
+that names KMS rather than the mistake.
+
+The agent Lambda ships from the **same build as the api Lambda** — same `airhead` package,
+same `airhead.handler.handler`, same zip. `./backend/build-lambda.sh` still builds one
+artifact; M2 adds a second function over it, with its own role, timeout, and log group.
+It exists separately so that the role serving CRUD never holds the Anthropic key, and so
+that a 25-second model turn and a 15-second timeout on a DynamoDB query can coexist.
+
+Tuning lives in `variables.tf` under the M2 divider — `agent_effort` (`low`/`medium`/`high`)
+is the cost and latency lever worth sweeping first; `agent_max_tokens` caps thinking *plus*
+reply on Opus 5, so it is not a reply-length setting.
+
+`agent_reserved_concurrency` defaults to 3. It is a spend cap, not a performance setting:
+a retry loop on the kitchen display costs real money per minute at Opus pricing, and past
+three simultaneous turns in a three-person household something is wrong.
+
 ## Things that will bite you
 
 - **`project` must never change after the first apply.** It prefixes every resource name;

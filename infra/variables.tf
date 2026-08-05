@@ -80,3 +80,84 @@ variable "api_throttle_burst_limit" {
   type        = number
   default     = 40
 }
+
+# --- M2: agent ---------------------------------------------------------------
+#
+# No variable holds the Anthropic key. It is not here, it is not in terraform.tfvars,
+# and there is no `sensitive` input that would put it in state - see secrets.tf for
+# how the operator populates it and why that was the choice.
+
+variable "agent_memory_mb" {
+  description = "Memory for the agent Lambda. This function waits on the model far more than it computes, and waiting is billed as GB-seconds - so this is a cold-start dial with a direct cost penalty, not a speed dial."
+  type        = number
+  default     = 512
+}
+
+variable "agent_timeout_seconds" {
+  description = "Timeout for the agent Lambda. Sized for a multi-call tool loop with thinking on; the 30s HTTP API integration ceiling is the real limit, so this must stay under it."
+  type        = number
+  default     = 28
+
+  # Where 28 comes from, so the next person can re-derive it instead of guessing:
+  #
+  #   one Opus 5 turn, effort=medium, thinking on   ~4-8s
+  #   a typical write ("add soccer thursday at 4")  = 2 model turns + 1 tool call
+  #   a confirmed delete or a conflict check        = 3 model turns
+  #   tool calls themselves (DynamoDB Query/Put)    < 100ms, not the term that matters
+  #
+  # So p50 is ~8-12s and a three-turn tail is ~20-25s. 28 covers that tail with two
+  # seconds of margin under the gateway, which is deliberate: the function must be the
+  # thing that times out, so the failure appears in its own log group with the turn's
+  # context, not as a bare 504 the client cannot distinguish from a network drop.
+  #
+  # If turns genuinely need longer than this, the answer is not a bigger number - the
+  # ceiling is API Gateway's, not Lambda's. It is streaming (a Lambda Function URL with
+  # response streaming) or an async job the display polls. Both are M2.5 conversations.
+  validation {
+    condition     = var.agent_timeout_seconds > 0 && var.agent_timeout_seconds < 30
+    error_message = "agent_timeout_seconds must be under 30 - API Gateway HTTP APIs cap the integration at 30s, so a larger value cannot take effect."
+  }
+}
+
+variable "agent_reserved_concurrency" {
+  description = "Concurrent agent invocations allowed. A hard ceiling on in-flight model spend; -1 disables the reservation and lets the function draw on the account pool."
+  type        = number
+  default     = 3
+
+  validation {
+    condition     = var.agent_reserved_concurrency == -1 || var.agent_reserved_concurrency >= 1
+    error_message = "agent_reserved_concurrency must be -1 (unreserved) or at least 1 - 0 disables the function entirely."
+  }
+}
+
+variable "agent_model" {
+  description = "Anthropic model id for the conversational agent. Pinned, never an alias: a floating id changes cost and behaviour on Anthropic's release schedule rather than on a deploy."
+  type        = string
+  default     = "claude-opus-5"
+}
+
+variable "agent_effort" {
+  description = "Opus 5 thinking depth (output_config.effort). The primary cost and latency lever - the M2 contract says to sweep low/medium/high against real transcripts, and this is the knob that sweep turns."
+  type        = string
+  default     = "medium"
+
+  validation {
+    condition     = contains(["low", "medium", "high"], var.agent_effort)
+    error_message = "agent_effort must be low, medium, or high. Opus 5 removed budget_tokens - depth is set with effort, and a budget_tokens parameter returns a 400."
+  }
+}
+
+variable "agent_max_tokens" {
+  description = "max_tokens for an agent turn. On Opus 5 this caps thinking PLUS response text, so sizing it around the visible answer truncates the answer once thinking is counted."
+  type        = number
+  default     = 16384
+
+  # 16k is the PRD §10 figure for the non-streaming path; the 64k figure there is for
+  # streaming to the screen, which this synchronous route does not do. A reply to
+  # "add soccer thursday at 4" is a couple of hundred tokens - essentially all of this
+  # budget is headroom for thinking, and unused budget is not billed.
+  validation {
+    condition     = var.agent_max_tokens >= 4096
+    error_message = "agent_max_tokens must be at least 4096 - thinking counts against this ceiling, so a small value truncates the reply mid-sentence rather than producing a short one."
+  }
+}
