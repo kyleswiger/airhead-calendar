@@ -17,8 +17,8 @@ import agendaFixture from "./fixtures/agenda.sample.json";
 import eventsFixture from "./fixtures/events.sample.json";
 import { rebaseAgenda, shiftRow } from "./lib/agenda";
 import { daysBetween, todayIsoDate } from "./lib/format";
-import { isRecord, parseAgenda, parseApiError, parseRow } from "./lib/parse";
-import type { AgendaResponse, EventRow } from "./types";
+import { isRecord, parseAgenda, parseAgentTurn, parseApiError, parseRow } from "./lib/parse";
+import type { AgendaResponse, AgentTurnRequest, AgentTurnResponse, EventRow } from "./types";
 import { isEventRow } from "./types";
 
 // Narrowed off Vite's `any`-typed index signature so nothing downstream is `any`.
@@ -27,6 +27,14 @@ const env: Record<string, string | undefined> = import.meta.env;
 const API_BASE = env["VITE_API_BASE"];
 /** M1 header shim actor. Defaults to the adult admin placeholder. */
 const MEMBER_ID = env["VITE_MEMBER_ID"] ?? "mem_alex";
+
+/**
+ * Who this screen is acting as. Exported because the agent panel has to *show*
+ * it: the kitchen display is in a shared space, and the acting identity decides
+ * what the agent is allowed to do (PRD §10.1 - `actor_member_id` is injected
+ * server-side from this header and the model cannot spoof it).
+ */
+export const actingMemberId = MEMBER_ID;
 
 /** True when we are rendering the bundled sample rather than live data. */
 export const usingFixture = typeof API_BASE !== "string" || API_BASE.length === 0;
@@ -47,7 +55,7 @@ function baseUrl(): string {
   return typeof API_BASE === "string" ? API_BASE.replace(/\/+$/, "") : "";
 }
 
-function headers(): HeadersInit {
+function headers(): Record<string, string> {
   return { Accept: "application/json", "X-Airhead-Member": MEMBER_ID };
 }
 
@@ -61,10 +69,8 @@ async function readJson(res: Response): Promise<unknown> {
   }
 }
 
-async function request(path: string, signal?: AbortSignal): Promise<unknown> {
-  const init: RequestInit = { headers: headers() };
-  if (signal !== undefined) init.signal = signal;
-  const res = await fetch(`${baseUrl()}${path}`, init);
+/** M1 error envelope in, `ApiError` out. Every call funnels through here. */
+async function unwrap(res: Response): Promise<unknown> {
   const body = await readJson(res);
   if (!res.ok) {
     const parsed = parseApiError(body);
@@ -75,6 +81,22 @@ async function request(path: string, signal?: AbortSignal): Promise<unknown> {
     );
   }
   return body;
+}
+
+async function request(path: string, signal?: AbortSignal): Promise<unknown> {
+  const init: RequestInit = { headers: headers() };
+  if (signal !== undefined) init.signal = signal;
+  return unwrap(await fetch(`${baseUrl()}${path}`, init));
+}
+
+async function postJson(path: string, payload: unknown, signal?: AbortSignal): Promise<unknown> {
+  const init: RequestInit = {
+    method: "POST",
+    headers: { ...headers(), "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  };
+  if (signal !== undefined) init.signal = signal;
+  return unwrap(await fetch(`${baseUrl()}${path}`, init));
 }
 
 // --- fixture mode ----------------------------------------------------------
@@ -149,4 +171,19 @@ export async function fetchEvents(
     if (row !== null && isEventRow(row)) rows.push(row);
   }
   return rows;
+}
+
+/**
+ * One conversational turn (`docs/M2-CONTRACT.md`).
+ *
+ * There is no fixture branch here on purpose. The agenda can be faked because a
+ * fake agenda is obviously sample data; a faked *agent reply* would claim a
+ * write happened that never did. With no API configured this fails, and the
+ * panel says so.
+ */
+export async function postAgentTurn(
+  body: AgentTurnRequest,
+  signal?: AbortSignal,
+): Promise<AgentTurnResponse> {
+  return parseAgentTurn(await postJson("/api/agent/turn", body, signal));
 }

@@ -121,3 +121,78 @@ export function isBusyRow(row: AgendaRow): row is BusyRow {
 export function isEventRow(row: AgendaRow): row is EventRow {
   return row.kind === "event";
 }
+
+/* ------------------------------------------------------------------ M2 -- */
+
+/**
+ * Hand-written mirror of `docs/M2-CONTRACT.md`, `POST /api/agent/turn`.
+ *
+ * Same two rules as above: unknown fields are ignored, and every one of these
+ * is a subset of the wire. Tool names are plain strings rather than a union -
+ * the tool surface grows, and a display that throws on a tool it has never
+ * heard of is a display that goes dark the week a tool is added.
+ */
+
+/** The answer to a pending gate, sent back as a *new* turn. */
+export interface AgentConfirmAnswer {
+  callId: string;
+  approved: boolean;
+}
+
+export interface AgentTurnRequest {
+  message: string;
+  /** Omitted to start a new conversation. */
+  conversationId?: string;
+  /**
+   * The client's clock as an ISO *instant*. The server echoes it into the user
+   * turn (never the system prompt - that would break prompt caching silently).
+   */
+  now: string;
+  /** Household IANA zone. The browser sends it; it never computes with it. */
+  tz: string;
+  /** Present only when answering a pending gate. */
+  confirm?: AgentConfirmAnswer;
+}
+
+/**
+ * A write that was actually applied. Gated calls that were never approved do
+ * not appear, so the presence of one of these is the display's cue to re-fetch.
+ */
+export interface AgentAction {
+  tool: string;
+  status: string;
+  eventId?: string;
+}
+
+/**
+ * The agent stopped and is waiting. This is the *server's* gate, not the UI's:
+ * the tool refused to run and returned this instead. The only way past it is a
+ * new turn carrying `confirm`.
+ */
+export interface PendingConfirmation {
+  callId: string;
+  tool: string;
+  summary: string;
+  eventId?: string;
+}
+
+export interface AgentUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+}
+
+export interface AgentTurnResponse {
+  conversationId: string;
+  turnId: string;
+  /**
+   * Populated when the turn completed. A turn either completes or stops on a
+   * gate, never both - so this is "" on a gated turn and the UI renders only
+   * what is actually there.
+   */
+  reply: string;
+  actions: AgentAction[];
+  /** Present iff the agent stopped on a gate. */
+  pendingConfirmation?: PendingConfirmation;
+  usage?: AgentUsage;
+}

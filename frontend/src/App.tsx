@@ -1,12 +1,14 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
-import { usingFixture } from "./api";
+import { actingMemberId, usingFixture } from "./api";
+import { ChatPanel } from "./components/ChatPanel";
 import { DayView } from "./components/DayView";
 import { DisplayHeader } from "./components/DisplayHeader";
 import { NavBar, type ViewMode } from "./components/NavBar";
 import { StatusNote } from "./components/StatusNote";
 import { WeekView } from "./components/WeekView";
 import { useAgenda } from "./hooks/useAgenda";
+import { useAgentChat } from "./hooks/useAgentChat";
 import { useNow } from "./hooks/useNow";
 import { daySpan, findDay, indexMembers } from "./lib/agenda";
 import { addDays, daysBetween, formatMonthDay, todayIsoDate } from "./lib/format";
@@ -19,6 +21,8 @@ export function App() {
 
   const [view, setView] = useState<ViewMode>("day");
   const [selected, setSelected] = useState(today);
+  const [chatOpen, setChatOpen] = useState(false);
+  const chatButton = useRef<HTMLButtonElement>(null);
 
   // One request covers every view: the day, tomorrow and the week are all
   // slices of the same window, so tapping between them is instant and the
@@ -32,6 +36,17 @@ export function App() {
   const { data, status, error, fetchedAt, stale, reload } = useAgenda(windowStart, windowEnd);
 
   const members = useMemo(() => indexMembers(data?.members ?? []), [data]);
+
+  // The agent's writes land in DynamoDB, not in this component's state, so the
+  // only honest way to show them is to ask the API again. The chat lives up
+  // here rather than inside the panel so a turn survives the panel closing.
+  const chat = useAgentChat({ tz: data?.range.tz ?? "", onWrite: reload });
+
+  const closeChat = useCallback(() => {
+    setChatOpen(false);
+    // Focus goes back to the button that opened the panel, never to <body>.
+    chatButton.current?.focus();
+  }, []);
   const weekDays = useMemo(
     () => (data === null ? [] : daySpan(data, windowStart, WEEK_DAYS)),
     [data, windowStart],
@@ -89,6 +104,9 @@ export function App() {
         view={view}
         isToday={isToday}
         isTomorrow={isTomorrow}
+        chatOpen={chatOpen}
+        chatRef={chatButton}
+        onChat={() => setChatOpen(true)}
         onPrev={() => step(-1)}
         onNext={() => step(1)}
         onToday={() => {
@@ -101,6 +119,15 @@ export function App() {
         }}
         onWeek={() => setView("week")}
       />
+
+      {chatOpen ? (
+        <ChatPanel
+          chat={chat}
+          actor={members.get(actingMemberId)}
+          actorId={actingMemberId}
+          onClose={closeChat}
+        />
+      ) : null}
     </main>
   );
 }
