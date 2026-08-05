@@ -4,6 +4,9 @@ version = "0.1.0"
 description = "Airhead Calendar - family calendar with an agentic interface"
 requires-python = ">=3.12"
 dependencies = [
+    # The tool runner lives under client.beta.messages; keep this current enough
+    # that `@beta_tool` and `tool_runner` exist.
+    "anthropic>=0.116",
     "boto3>=1.35",
     "fastapi>=0.115",
     "mangum>=0.19",
