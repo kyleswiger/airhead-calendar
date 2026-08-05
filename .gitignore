@@ -11,6 +11,9 @@ htmlcov/
 dist/
 build/
 
+# Lambda deployment artifacts - rebuilt from source by backend/build-lambda.sh.
+*.zip
+
 # Node
 node_modules/
 frontend/dist/

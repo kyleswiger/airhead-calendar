@@ -11,12 +11,16 @@ echo "==> terraform outputs"
 BUCKET=$(terraform -chdir=infra output -raw site_bucket)
 DIST_ID=$(terraform -chdir=infra output -raw cloudfront_distribution_id)
 SITE_URL=$(terraform -chdir=infra output -raw site_url)
+# Vite inlines VITE_* at build time, so the API URL is baked into the bundle. Read
+# it from state rather than the environment: forgetting to export it does not fail
+# the build, it silently ships a site that renders the sample fixture instead.
+API_BASE=$(terraform -chdir=infra output -raw api_base_url)
 
 echo "==> building frontend"
 # npm ci, not npm install: a stale node_modules beside an updated package.json
 # fails at build time with an unresolvable-import error that looks like broken
 # source. Cost an afternoon on the cabin deploy; not repeating it.
-(cd frontend && npm ci && npm run build)
+(cd frontend && npm ci && VITE_API_BASE="${API_BASE}" npm run build)
 
 echo "==> syncing to s3://${BUCKET}"
 # Hashed assets are immutable and cache hard. index.html must not, or the
