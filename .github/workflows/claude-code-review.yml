@@ -26,9 +26,6 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # TEMPORARY - diagnostic only, revert before merging. The action hides
-          # the SDK output by default, which also hides why the run fails.
-          show_full_output: true
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
           # --comment is required. Without it the plugin prints the review to the
