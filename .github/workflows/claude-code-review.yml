@@ -27,10 +27,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # TEMPORARY - diagnostic only, revert before merging. The action hides
-          # the SDK's output by default, which also hides why the run fails. This
-          # workflow has never completed successfully, so there is no known-good
-          # output to compare against; turning it on is the only way to see the
-          # actual error. Public repo: read the log before leaving this on.
+          # the SDK output by default, which also hides why the run fails.
           show_full_output: true
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
