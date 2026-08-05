@@ -12,13 +12,14 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import Depends, Header
 
 from airhead.api.errors import Unauthorized
 from airhead.domain import Member
 from airhead.repo.base import EventRepo, MemberRepo, SourceRepo
+from airhead.repo.turns import TurnRepo
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +29,11 @@ class Settings:
     backend: str  # "dynamodb" | "sqlite"
     table_name: str
     sqlite_path: str
+    agent_model: str
+    # Depth, not length: Opus 5 removed `budget_tokens` and takes `output_config.effort`.
+    agent_effort: str
+    # Caps thinking *plus* response text, so it is sized well above the visible answer.
+    agent_max_tokens: int
 
 
 @lru_cache(maxsize=1)
@@ -38,11 +44,14 @@ def get_settings() -> Settings:
         backend=os.environ.get("AIRHEAD_REPO_BACKEND", "dynamodb"),
         table_name=os.environ.get("AIRHEAD_TABLE", "airhead"),
         sqlite_path=os.environ.get("AIRHEAD_SQLITE_PATH", ":memory:"),
+        agent_model=os.environ.get("AIRHEAD_AGENT_MODEL", "claude-opus-5"),
+        agent_effort=os.environ.get("AIRHEAD_AGENT_EFFORT", "medium"),
+        agent_max_tokens=int(os.environ.get("AIRHEAD_AGENT_MAX_TOKENS", "16000")),
     )
 
 
 @lru_cache(maxsize=1)
-def _repos() -> tuple[EventRepo, MemberRepo, SourceRepo]:
+def _repos() -> tuple[EventRepo, MemberRepo, SourceRepo, TurnRepo]:
     settings = get_settings()
     if settings.backend == "sqlite":
         from airhead.repo.sqlite import (
@@ -51,15 +60,27 @@ def _repos() -> tuple[EventRepo, MemberRepo, SourceRepo]:
             SqliteSourceRepo,
             connect,
         )
+        from airhead.repo.turns import SqliteTurnRepo
 
         conn = connect(settings.sqlite_path)
-        return SqliteEventRepo(conn), SqliteMemberRepo(conn), SqliteSourceRepo(conn)
+        return (
+            SqliteEventRepo(conn),
+            SqliteMemberRepo(conn),
+            SqliteSourceRepo(conn),
+            SqliteTurnRepo(conn),
+        )
 
     # Imported lazily: this is the only line in the API package that pulls in boto3.
     from airhead.repo.dynamo import DynamoEventRepo, DynamoMemberRepo, DynamoSourceRepo
+    from airhead.repo.turns import DynamoTurnRepo
 
     table = settings.table_name
-    return DynamoEventRepo(table), DynamoMemberRepo(table), DynamoSourceRepo(table)
+    return (
+        DynamoEventRepo(table),
+        DynamoMemberRepo(table),
+        DynamoSourceRepo(table),
+        DynamoTurnRepo(table),
+    )
 
 
 def get_household_id() -> str:
@@ -80,6 +101,77 @@ def get_member_repo() -> MemberRepo:
 
 def get_source_repo() -> SourceRepo:
     return _repos()[2]
+
+
+def get_turn_repo() -> TurnRepo:
+    return _repos()[3]
+
+
+def _anthropic_api_key() -> str:
+    """Resolve the model API key.
+
+    In AWS the Lambda receives `AIRHEAD_ANTHROPIC_KEY_PARAM` — the *name* of an SSM
+    SecureString, not the key. Terraform cannot pass the key itself: reading it there
+    would need a `data "aws_ssm_parameter"`, which writes the decrypted value into
+    remote state in a shared S3 bucket. So the decrypt happens here, at first use.
+
+    Locally there is no SSM and no reason to need AWS credentials, so a plain
+    `ANTHROPIC_API_KEY` is the fallback. Neither value is ever logged or put in an
+    error message.
+    """
+    param = os.environ.get("AIRHEAD_ANTHROPIC_KEY_PARAM", "")
+    if param:
+        import boto3
+
+        response = boto3.client("ssm").get_parameter(Name=param, WithDecryption=True)
+        return str(response["Parameter"]["Value"])
+
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not key:
+        raise RuntimeError("Neither AIRHEAD_ANTHROPIC_KEY_PARAM nor ANTHROPIC_API_KEY is set.")
+    return key
+
+
+@lru_cache(maxsize=1)
+def _anthropic_client() -> Any:
+    """The Anthropic client, built on first use and reused across warm invocations.
+
+    Never at import time: pytest would need a key just to import the app, and a cold
+    Lambda that imports the SDK - or calls SSM - before it knows it needs to pays for
+    that on every invocation, including the routes that never touch the model.
+    """
+    from anthropic import Anthropic
+
+    return Anthropic(api_key=_anthropic_api_key())
+
+
+def get_runner() -> Any:
+    """The agent's model loop (`airhead.agent.runner`).
+
+    Injected as a whole module rather than a bare function so the route can build a
+    `TurnRequest` and a `Confirmation` without importing the agent package at module
+    scope — that import pulls in the Anthropic SDK, and the HTTP surface is tested
+    with a stub of this seam so the routes stay independent of the model loop.
+    """
+    from airhead.agent import runner
+
+    return runner
+
+
+def get_agent_deps(
+    runner: Annotated[Any, Depends(get_runner)],
+    events: Annotated[EventRepo, Depends(get_event_repo)],
+    members: Annotated[MemberRepo, Depends(get_member_repo)],
+) -> Any:
+    settings = get_settings()
+    return runner.AgentDeps(
+        events=events,
+        members=members,
+        client=_anthropic_client(),
+        model=settings.agent_model,
+        effort=settings.agent_effort,
+        max_tokens=settings.agent_max_tokens,
+    )
 
 
 def get_actor(
@@ -106,5 +198,8 @@ Actor = Annotated[Member, Depends(get_actor)]
 Events = Annotated[EventRepo, Depends(get_event_repo)]
 Members = Annotated[MemberRepo, Depends(get_member_repo)]
 Sources = Annotated[SourceRepo, Depends(get_source_repo)]
+Turns = Annotated[TurnRepo, Depends(get_turn_repo)]
+Runner = Annotated[Any, Depends(get_runner)]
+AgentRuntime = Annotated[Any, Depends(get_agent_deps)]
 HouseholdId = Annotated[str, Depends(get_household_id)]
 Tz = Annotated[str, Depends(get_tz)]

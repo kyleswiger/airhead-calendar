@@ -24,6 +24,7 @@ from fastapi import Depends, FastAPI, Query, Request, Response
 from fastapi import status as http_status
 
 from airhead.agenda import build_agenda
+from airhead.api.agent import router as agent_router
 from airhead.api.deps import Actor, Events, HouseholdId, Members, Tz, get_actor
 from airhead.api.errors import (
     BadRequest,
@@ -235,9 +236,11 @@ app = FastAPI(
         403: {"model": ErrorResponse},
         404: {"model": ErrorResponse},
         422: {"model": ErrorResponse},
+        502: {"model": ErrorResponse},
     },
 )
 install_error_handlers(app)
+app.include_router(agent_router)
 
 
 @app.middleware("http")
