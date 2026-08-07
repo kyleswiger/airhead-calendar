@@ -78,6 +78,14 @@ cp -r src/airhead "${BUILD_DIR}/airhead"
 find "${BUILD_DIR}" -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
 find "${BUILD_DIR}" -type f -name '*.pyc' -delete
 
+# `archive_file` hashes file mtimes along with content, and pip stamps every file
+# with the moment it was written - so an unchanged tree rebuilt an hour later gets
+# a new source_code_hash and Terraform proposes redeploying byte-identical code.
+# That is not just noise: it destroys the only cheap way to answer "is what's
+# deployed actually what's on main?", because plan always says no. Flattening
+# mtimes to a fixed epoch makes the artifact a pure function of its contents.
+find "${BUILD_DIR}" -exec touch -h -t 200001010000 {} +
+
 SIZE=$(du -sh "${BUILD_DIR}" | cut -f1)
 echo "==> built ${BUILD_DIR} (${SIZE} unpacked)"
 echo "    next: cd infra && terraform apply"
