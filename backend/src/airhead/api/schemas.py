@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
-from airhead.domain import MemberRole, Tier, TierSource, Visibility
+from airhead.domain import EventStatus, MemberRole, Tier, TierSource, Visibility
 
 MAX_TITLE = 500
 MAX_LOCATION = 500
@@ -71,6 +71,7 @@ class EventRowOut(Wire):
     member_ids: list[str]
     location: str | None = None
     visibility: Visibility
+    status: EventStatus = EventStatus.CONFIRMED
     is_family: bool
     occurrence_id: str | None = None
 
