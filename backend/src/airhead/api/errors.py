@@ -26,6 +26,7 @@ _STATUS_CODES: dict[int, str] = {
     405: "method_not_allowed",
     409: "conflict",
     422: "validation_error",
+    502: "upstream_error",
 }
 
 
@@ -63,6 +64,18 @@ class NotFound(ApiError):
 class Conflict(ApiError):
     status_code = 409
     code = "conflict"
+
+
+class UpstreamError(ApiError):
+    """A dependency we do not control failed - today, the model API.
+
+    Distinct from `internal_error` so the kiosk can say "the assistant is unavailable"
+    rather than "something broke", and so it never surfaces a provider stack trace: an
+    SDK exception can quote the request, and the request quotes event titles.
+    """
+
+    status_code = 502
+    code = "upstream_error"
 
 
 class InvalidRequest(ApiError):

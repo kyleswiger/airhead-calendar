@@ -89,3 +89,124 @@ resource "aws_lambda_function" "api" {
   # can race Lambda into creating it implicitly.
   depends_on = [aws_cloudwatch_log_group.api]
 }
+
+# --- M2: agent ---------------------------------------------------------------
+
+# Deliberately no `data "archive_file" "agent"`. The agent is not a separate program:
+# it is `POST /api/agent/turn` on the same FastAPI app, in the same `airhead` package,
+# produced by the same `./backend/build-lambda.sh`. Zipping the identical directory a
+# second time would give two artifacts that must be rebuilt in lockstep and would drift
+# the first time someone rebuilds one - so both functions point at one archive.
+#
+# That also answers most of the "second deployment artifact" objection to giving the
+# agent its own function (the routing note in api.tf): what M2 actually adds is a
+# second *function* over the same bytes, not a second build.
+
+resource "aws_cloudwatch_log_group" "agent" {
+  name              = "/aws/lambda/${var.project}-agent"
+  retention_in_days = var.log_retention_days
+}
+
+resource "aws_lambda_function" "agent" {
+  function_name = "${var.project}-agent"
+  description   = "Anthropic tool loop for ${var.project}: natural language in, calendar tool calls out."
+  role          = aws_iam_role.agent.arn
+
+  # Same entry point as the api function, on purpose. API Gateway only ever routes
+  # POST /api/agent/turn here (see api.tf), so the extra routes this app carries are
+  # unreachable through the gateway; what the shared handler buys is that the agent
+  # route is developed, tested, and imported exactly once. If the agent package later
+  # grows a leaner entry point that skips the CRUD imports for cold-start reasons,
+  # this line is the only thing that changes.
+  handler = "airhead.handler.handler"
+  runtime = "python3.12"
+
+  # Must match the api function and build-lambda.sh's LAMBDA_ARCH - see the note there.
+  # They share an artifact, so these cannot diverge even in principle.
+  architectures = ["arm64"]
+
+  # Sized against the wrong instinct. This function spends nearly all of its wall
+  # clock blocked on the Anthropic API, and Lambda bills GB-seconds for time spent
+  # waiting on a socket exactly like time spent computing - so doubling memory doubles
+  # the cost of the dominant term and does not make the model answer one millisecond
+  # sooner. Memory here buys only cold-start speed on the `anthropic` + `httpx` +
+  # FastAPI import, and 512MB already covers that. Raising it is a pure cost increase.
+  memory_size = var.agent_memory_mb
+
+  # See the derivation on var.agent_timeout_seconds. Short version: a turn is 2-3
+  # sequential model calls with thinking on, and the binding constraint is not this
+  # number - it is API Gateway's 30s integration ceiling, which this sits just under
+  # so a slow turn fails as a Lambda timeout in this function's log group rather than
+  # an opaque gateway 504.
+  timeout = var.agent_timeout_seconds
+
+  # A hard ceiling on how much model spend can be in flight at once. Three people and
+  # one wall display cannot legitimately have more turns running than this, and the
+  # failure mode it guards against - a retry loop on the display, or the same request
+  # replayed - is measured in dollars per minute at Opus pricing, not in cents like a
+  # runaway DynamoDB query. Throttled invocations surface as 429s, which is the right
+  # answer to "you are already asking". Set to -1 to opt out.
+  reserved_concurrent_executions = var.agent_reserved_concurrency
+
+  filename         = data.archive_file.api.output_path
+  source_code_hash = data.archive_file.api.output_base64sha256
+
+  # NO VPC CONFIGURATION. The reasoning on the api function above applies unchanged,
+  # and one thing more: this function's only outbound dependency is api.anthropic.com,
+  # a public endpoint with no VPC endpoint to buy. In a VPC it would need a NAT gateway
+  # - not an interface endpoint - which is the most expensive way this stack could
+  # possibly reach the internet, on a $7-13/month budget (PRD §16).
+
+  environment {
+    variables = {
+      # Same contract as the api function - airhead.api.deps.Settings reads these.
+      AIRHEAD_TABLE        = aws_dynamodb_table.airhead.name
+      AIRHEAD_HOUSEHOLD_ID = var.household_id
+      AIRHEAD_TZ           = var.household_timezone
+      AIRHEAD_LOG_LEVEL    = var.log_level
+      AIRHEAD_REPO_BACKEND = "dynamodb"
+
+      # The parameter NAME. Never the key, and never an ANTHROPIC_API_KEY variable
+      # holding one: Lambda environment variables are plaintext to anyone with
+      # lambda:GetFunctionConfiguration, they are rendered in the console, and the
+      # only way Terraform could set one is by reading the SecureString through a
+      # data source - which writes the decrypted key into remote state, undoing the
+      # entire arrangement in secrets.tf. The function resolves this name through SSM
+      # at runtime with the role's own scoped grant (iam.tf) and caches the client for
+      # the container's life.
+      #
+      # MISMATCH TO RECONCILE, and it is a runtime failure rather than a build one:
+      # airhead.api.deps._anthropic_client() currently does
+      # `os.environ.get("ANTHROPIC_API_KEY")` and raises if it is empty. Nothing sets
+      # that variable here and nothing should. The seam is already in the right place -
+      # one lru_cached constructor - so the fix is inside it: read this parameter name,
+      # call ssm.get_parameter(Name=..., WithDecryption=True), and pass the result as
+      # an explicit api_key=. Because the key will not arrive through the SDK's default
+      # ANTHROPIC_API_KEY lookup, a client constructed with no argument fails at the
+      # first request rather than at import, which is a slow way to find this out.
+      # Keeping the env-var read as a local-development fallback is fine.
+      AIRHEAD_ANTHROPIC_KEY_PARAM = aws_ssm_parameter.anthropic_api_key.name
+
+      # M2 contract, "The model". Configuration rather than constants because effort
+      # is the primary cost/latency lever and the contract explicitly says to sweep
+      # low/medium/high against real transcripts - which is a variable change and an
+      # apply, not a rebuild. Note what is absent: no temperature, top_p, or top_k,
+      # which Opus 5 rejects outright, and no budget_tokens, which is removed and
+      # returns a 400.
+      AIRHEAD_AGENT_MODEL      = var.agent_model
+      AIRHEAD_AGENT_EFFORT     = var.agent_effort
+      AIRHEAD_AGENT_MAX_TOKENS = tostring(var.agent_max_tokens)
+    }
+  }
+
+  # JSON for the same reason as the api function, and it matters more here: a turn
+  # legitimately handles event titles, which are household PII and must not reach a
+  # log line at INFO (PRD §13, M2 contract "Audit log"). The turn record in DynamoDB
+  # is where the transcript belongs; CloudWatch gets ids, counts, and token usage.
+  logging_config {
+    log_format = "JSON"
+    log_group  = aws_cloudwatch_log_group.agent.name
+  }
+
+  depends_on = [aws_cloudwatch_log_group.agent]
+}

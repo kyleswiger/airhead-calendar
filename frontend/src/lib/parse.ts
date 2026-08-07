@@ -13,10 +13,14 @@ import type {
   AgendaDay,
   AgendaResponse,
   AgendaRow,
+  AgentAction,
+  AgentTurnResponse,
+  AgentUsage,
   BusyRow,
   EventRow,
   Member,
   MemberRole,
+  PendingConfirmation,
   Tier,
   TierSource,
   TimedEventRow,
@@ -181,6 +185,79 @@ export function parseAgenda(value: unknown): AgendaResponse {
     members,
     days,
   };
+}
+
+/* ------------------------------------------------------------------ M2 -- */
+
+function parseAction(value: unknown): AgentAction | null {
+  if (!isRecord(value)) return null;
+  const tool = asString(value["tool"]);
+  if (tool === undefined) return null;
+  // An action with no status is not evidence that anything was applied, so it
+  // is reported as-is rather than assumed "ok".
+  const action: AgentAction = { tool, status: asString(value["status"]) ?? "unknown" };
+  const eventId = asString(value["eventId"]);
+  if (eventId !== undefined) action.eventId = eventId;
+  return action;
+}
+
+/**
+ * A gate is only a gate if we can answer it. Without a `callId` there is no
+ * round-trip to make, and without a `summary` there is nothing truthful to put
+ * in front of a human - in both cases we drop it rather than render a confirm
+ * button that would either fail or ask about nothing.
+ */
+function parsePending(value: unknown): PendingConfirmation | null {
+  if (!isRecord(value)) return null;
+  const callId = asString(value["callId"]);
+  const summary = asString(value["summary"]);
+  if (callId === undefined || summary === undefined) return null;
+  const pending: PendingConfirmation = {
+    callId,
+    tool: asString(value["tool"]) ?? "",
+    summary,
+  };
+  const eventId = asString(value["eventId"]);
+  if (eventId !== undefined) pending.eventId = eventId;
+  return pending;
+}
+
+function parseUsage(value: unknown): AgentUsage | null {
+  if (!isRecord(value)) return null;
+  return {
+    inputTokens: asCount(value["inputTokens"]) ?? 0,
+    outputTokens: asCount(value["outputTokens"]) ?? 0,
+    cacheReadInputTokens: asCount(value["cacheReadInputTokens"]) ?? 0,
+  };
+}
+
+/** Throws only when the envelope itself is unusable. */
+export function parseAgentTurn(value: unknown): AgentTurnResponse {
+  if (!isRecord(value)) throw new Error("Agent response was not an object");
+
+  const conversationId = asString(value["conversationId"]);
+  if (conversationId === undefined) {
+    // Without it the next turn would silently start a new conversation, and
+    // the confirmation round-trip would answer a gate nobody is holding.
+    throw new Error("Agent response is missing conversationId");
+  }
+
+  const rawActions = value["actions"];
+  const actions = Array.isArray(rawActions)
+    ? rawActions.map(parseAction).filter((a): a is AgentAction => a !== null)
+    : [];
+
+  const out: AgentTurnResponse = {
+    conversationId,
+    turnId: asString(value["turnId"]) ?? "",
+    reply: asString(value["reply"]) ?? "",
+    actions,
+  };
+  const pending = parsePending(value["pendingConfirmation"]);
+  if (pending !== null) out.pendingConfirmation = pending;
+  const usage = parseUsage(value["usage"]);
+  if (usage !== null) out.usage = usage;
+  return out;
 }
 
 export interface ApiErrorShape {
