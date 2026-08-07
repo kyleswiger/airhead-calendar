@@ -74,6 +74,8 @@ class PendingCall:
     tool: str
     summary: str
     event_id: str | None = None
+    # The gated call's original arguments, verbatim — what an approval replays.
+    args: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -166,6 +168,9 @@ def _pending_dict(turn: AgentTurn) -> dict[str, Any] | None:
         "tool": turn.pending.tool,
         "summary": turn.pending.summary,
         "eventId": turn.pending.event_id,
+        # A JSON string for the same reason as `historyJson`: the args are tool
+        # input of arbitrary shape, and DynamoDB's Map coercion must not touch it.
+        "argsJson": json.dumps(turn.pending.args, sort_keys=True, default=str),
     }
 
 
@@ -177,6 +182,7 @@ def _pending_from(raw: Any) -> PendingCall | None:
         tool=str(raw["tool"]),
         summary=str(raw["summary"]),
         event_id=raw.get("eventId"),
+        args=json.loads(raw.get("argsJson") or "{}"),
     )
 
 

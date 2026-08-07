@@ -139,6 +139,7 @@ class TestRoundTrip:
                     tool="delete_event",
                     summary='Delete "Soccer practice" on Thursday at 4:00 PM?',
                     event_id="evt_1",
+                    args={"event_id": "evt_1", "all_day": False},
                 ),
                 actions=[ToolCall(tool="delete_event", status="pending_confirmation")],
             )
@@ -149,6 +150,8 @@ class TestRoundTrip:
         assert stored.pending is not None
         assert stored.pending.call_id == "call_a"
         assert stored.pending.event_id == "evt_1"
+        # The stored arguments are what an approval replays — types intact.
+        assert stored.pending.args == {"event_id": "evt_1", "all_day": False}
         # A gated call is still recorded: the audit log says what was attempted.
         assert stored.actions[0].status == "pending_confirmation"
 

@@ -16,6 +16,7 @@ here rather than in the prompt:
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import uuid
@@ -64,8 +65,17 @@ DEFAULT_DURATION = timedelta(hours=1)
 
 @dataclass(frozen=True, slots=True)
 class Confirmation:
+    """A human's answer to a gate, plus what the gate was about.
+
+    `tool` and `args` come from the stored pending call, never from the client:
+    they are what lets the harness replay the approved write itself instead of
+    hoping the model re-issues the call on its next turn.
+    """
+
     call_id: str
     approved: bool
+    tool: str | None = None
+    args: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +92,10 @@ class PendingConfirmation:
     tool: str
     summary: str  # human-readable, shown on the kitchen screen
     event_id: str | None = None
+    # The original arguments of the gated call, verbatim. Persisted with the
+    # turn so an approval can be replayed by the harness with exactly the
+    # arguments that were approved — never re-derived, never the model's.
+    args: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -101,6 +115,10 @@ class ToolContext:
     confirm: Confirmation | None = None
     outcomes: list[ToolOutcome] = field(default_factory=list)
     pending: PendingConfirmation | None = None
+    # Call ids whose gate answer has already been acted on this turn — the
+    # double-execution guard. A model that re-issues an applied call gets a
+    # "already handled" tool result instead of a second write.
+    settled: set[str] = field(default_factory=set)
 
 
 # --- confirmation gate -------------------------------------------------------
@@ -122,6 +140,10 @@ class _Declined(Exception):
     """The person answered the gate with 'no'."""
 
 
+class _AlreadySettled(Exception):
+    """The gate's answer was already acted on this turn; nothing more to do."""
+
+
 class _Pending(Exception):
     """The gate has not been answered yet, so the write must not happen."""
 
@@ -130,20 +152,33 @@ class _Pending(Exception):
         self.pending = pending
 
 
-def _gate(ctx: ToolContext, *, tool: str, call_id: str, summary: str, event_id: str | None) -> None:
+def _gate(
+    ctx: ToolContext,
+    *,
+    tool: str,
+    call_id: str,
+    summary: str,
+    event_id: str | None,
+    args: dict[str, Any],
+) -> None:
     """Return normally only when this specific write has been approved.
 
     Raises on every other path, so the write below the call site is unreachable
     until a matching approval exists. An approval for a different call id is not
-    an approval for this one.
+    an approval for this one, and an approval that was already applied — the
+    harness replays approvals itself — never applies twice.
     """
+    if call_id in ctx.settled:
+        raise _AlreadySettled
     confirm = ctx.confirm
     if confirm is not None and confirm.call_id == call_id:
         if confirm.approved:
             return
         raise _Declined
     raise _Pending(
-        PendingConfirmation(call_id=call_id, tool=tool, summary=summary, event_id=event_id)
+        PendingConfirmation(
+            call_id=call_id, tool=tool, summary=summary, event_id=event_id, args=dict(args)
+        )
     )
 
 
@@ -471,6 +506,14 @@ def _update_event(
     if not fields:
         raise InvalidRequest("Nothing to change.")
 
+    # A re-issue of the exact call the harness already replayed this turn is
+    # "already done", not a second write.
+    same_call = call_id_for(
+        "update_event", event_id, json.dumps(fields, sort_keys=True, default=str)
+    )
+    if same_call in ctx.settled:
+        raise _AlreadySettled
+
     if stored.owner_member_id != ctx.actor.member_id:
         # Editing somebody else's calendar is a gate — the patch is part of the
         # id, so an approval authorizes this change and no other.
@@ -482,6 +525,7 @@ def _update_event(
             ),
             summary=f'Change "{stored.title}" on {_when(ctx, stored)}?',
             event_id=event_id,
+            args={"event_id": event_id, **fields},
         )
 
     if title is not None:
@@ -526,6 +570,10 @@ def _update_event(
 
 
 def _delete_event(ctx: ToolContext, event_id: str) -> str:
+    # Before the load: a replayed delete removed the event, so a model re-issue
+    # would otherwise read as "no such event" instead of "already done".
+    if call_id_for("delete_event", event_id) in ctx.settled:
+        raise _AlreadySettled
     stored = _visible(ctx, event_id)
     ensure_may_delete(ctx.actor, stored)
     _gate(
@@ -534,6 +582,7 @@ def _delete_event(ctx: ToolContext, event_id: str) -> str:
         call_id=call_id_for("delete_event", event_id),
         summary=f'Delete "{stored.title}" on {_when(ctx, stored)}?',
         event_id=event_id,
+        args={"event_id": event_id},
     )
     ctx.events.delete(ctx.household_id, event_id, at=datetime.now(UTC))
     ctx.outcomes.append(ToolOutcome(tool="delete_event", status="ok", event_id=event_id))
@@ -635,9 +684,68 @@ def _safe(ctx: ToolContext, tool: str, fn: Callable[[], str]) -> str:
     except _Declined:
         ctx.outcomes.append(ToolOutcome(tool=tool, status="error", detail="declined"))
         return "NOT DONE — the person declined this change."
+    except _AlreadySettled:
+        # No outcome: the settled answer was already recorded, and a duplicate
+        # row in the audit log would claim a second write that never happened.
+        return (
+            "Already handled — the person's answer to this request was applied "
+            "by the system. Do not repeat this call."
+        )
     except ApiError as exc:
         ctx.outcomes.append(ToolOutcome(tool=tool, status="error", detail=exc.code))
         raise ToolError(exc.message) from exc
+
+
+def settle_confirmation(ctx: ToolContext) -> ToolOutcome | None:
+    """Act on an answered gate before the model gets a say.
+
+    An approval is *replayed*: the harness executes the gated write itself, with
+    the original arguments stored on the pending call, exactly once. The model
+    is then only narrating — a turn where it never re-issues the tool call still
+    performs the write, and a turn where it does re-issue it hits the settled
+    guard in `_gate` instead of writing twice. A decline is recorded the same
+    way, so the audit log carries the answer whether or not the model mentions it.
+
+    Returns the outcome that was recorded, or None when there was nothing to do
+    (no answer this turn, or an answer whose gated call the route did not name —
+    the legacy path, where the model's re-issue carries the write).
+    """
+    confirm = ctx.confirm
+    if confirm is None or confirm.call_id in ctx.settled or not confirm.tool:
+        return None
+
+    before = len(ctx.outcomes)
+    if not confirm.approved:
+        ctx.outcomes.append(ToolOutcome(tool=confirm.tool, status="error", detail="declined"))
+        ctx.settled.add(confirm.call_id)
+        return ctx.outcomes[-1]
+
+    args = confirm.args or {}
+    replays: dict[str, Callable[[], str]] = {
+        "delete_event": lambda: _delete_event(ctx, str(args["event_id"])),
+        "update_event": lambda: _update_event(
+            ctx,
+            str(args["event_id"]),
+            args.get("title"),
+            args.get("start"),
+            args.get("end"),
+            args.get("all_day"),
+            args.get("location"),
+            args.get("involves"),
+        ),
+    }
+    fn = replays.get(confirm.tool)
+    if fn is None:
+        ctx.outcomes.append(
+            ToolOutcome(tool=confirm.tool, status="error", detail="unreplayable")
+        )
+    else:
+        # `_safe` records the error outcome before raising ToolError; there is
+        # no model here to read the message, so the exception is the noise.
+        with contextlib.suppress(ToolError):
+            _safe(ctx, confirm.tool, fn)
+    ctx.settled.add(confirm.call_id)
+    return ctx.outcomes[before] if len(ctx.outcomes) > before else None
 
 
 def build_tools(ctx: ToolContext) -> list[Any]:
