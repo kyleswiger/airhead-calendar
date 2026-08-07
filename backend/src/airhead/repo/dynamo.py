@@ -42,6 +42,7 @@ from botocore.exceptions import ClientError
 from airhead.domain import (
     Event,
     EventSource,
+    EventStatus,
     Member,
     MemberRole,
     Source,
@@ -349,6 +350,7 @@ def _event_to_item(event: Event) -> dict[str, Any]:
         "tier": event.tier.value,
         "tierSource": event.tier_source.value,
         "visibility": event.visibility.value,
+        "status": event.status.value,
         "sourceKind": event.source.kind.value,
         "contentHash": event.content_hash(),
         # GSI2 keys the per-member day slice off the owner only. An event can hold
@@ -402,6 +404,8 @@ def _item_to_event(item: dict[str, Any]) -> Event:
         tier=Tier(item["tier"]),
         tier_source=TierSource(item["tierSource"]),
         visibility=Visibility(item["visibility"]),
+        # Items written before the status field existed are settled events.
+        status=EventStatus(item.get("status", EventStatus.CONFIRMED.value)),
         merge_group_id=item.get("mergeGroupId"),
         recurrence_parent_id=item.get("recurrenceParentId"),
         recurrence_id=item.get("recurrenceId"),

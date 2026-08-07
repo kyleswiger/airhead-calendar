@@ -19,6 +19,7 @@ from pathlib import Path
 from airhead.domain import (
     Event,
     EventSource,
+    EventStatus,
     Member,
     MemberRole,
     Source,
@@ -49,6 +50,7 @@ CREATE TABLE IF NOT EXISTS events (
     tier                 TEXT NOT NULL,
     tier_source          TEXT NOT NULL,
     visibility           TEXT NOT NULL,
+    status               TEXT NOT NULL DEFAULT 'confirmed',
     source_kind          TEXT NOT NULL,
     source_id            TEXT,
     external_id          TEXT,
@@ -168,9 +170,10 @@ class SqliteEventRepo(_SqliteRepo):
                 INSERT OR REPLACE INTO events (
                     household_id, event_id, title, start_utc, end_utc, tz, all_day, rrule,
                     exdates, owner_member_id, involves, location, tier, tier_source,
-                    visibility, source_kind, source_id, external_id, etag, merge_group_id,
-                    recurrence_parent_id, recurrence_id, created_by, updated_at, deleted_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    visibility, status, source_kind, source_id, external_id, etag,
+                    merge_group_id, recurrence_parent_id, recurrence_id, created_by,
+                    updated_at, deleted_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     stored.household_id,
@@ -188,6 +191,7 @@ class SqliteEventRepo(_SqliteRepo):
                     stored.tier.value,
                     stored.tier_source.value,
                     stored.visibility.value,
+                    stored.status.value,
                     stored.source.kind.value,
                     stored.source.source_id,
                     stored.source.external_id,
@@ -366,6 +370,7 @@ def _row_to_event(row: sqlite3.Row) -> Event:
         tier=Tier(row["tier"]),
         tier_source=TierSource(row["tier_source"]),
         visibility=Visibility(row["visibility"]),
+        status=EventStatus(row["status"]),
         merge_group_id=row["merge_group_id"],
         recurrence_parent_id=row["recurrence_parent_id"],
         recurrence_id=row["recurrence_id"],
