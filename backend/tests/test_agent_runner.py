@@ -415,6 +415,92 @@ def test_editing_someone_elses_event_is_gated_through_the_agent() -> None:
     assert repo.get(HOUSEHOLD, "evt_soccer").start_utc == datetime(2026, 8, 6, 21, 0, tzinfo=UTC)
 
 
+def _approve(pending: Any) -> Confirmation:
+    """What the route builds from the stored pending call: id, verdict, tool, args."""
+    return Confirmation(
+        call_id=pending.call_id, approved=True, tool=pending.tool, args=dict(pending.args)
+    )
+
+
+def test_an_approved_write_happens_even_if_the_model_never_reissues_the_call() -> None:
+    """The replay gap (issue #7): approval used to depend on the model calling the
+    tool again. Now the harness replays the stored call itself — a second turn
+    where the model only narrates still performs the write, exactly once, and
+    the audit log records it."""
+    _, deps, repo = harness(
+        [calls("delete_event", event_id="evt_soccer"), says("Delete soccer practice?")],
+        [says("Done — soccer practice is off the calendar.")],  # no tool call at all
+        events=[_soccer()],
+    )
+    first = ask(deps, "cancel soccer")
+    assert repo.get(HOUSEHOLD, "evt_soccer").is_deleted is False
+
+    second = ask(deps, "yes", history=first.history, confirm=_approve(first.pending))
+
+    assert repo.get(HOUSEHOLD, "evt_soccer").is_deleted is True
+    assert [(a.tool, a.status) for a in second.actions] == [("delete_event", "ok")]
+    assert second.pending is None
+    # The model was told the write already happened.
+    assert second.reply == "Done — soccer practice is off the calendar."
+
+
+def test_a_replayed_approval_is_not_double_executed_when_the_model_reissues() -> None:
+    _, deps, repo = harness(
+        [calls("delete_event", event_id="evt_soccer"), says("Delete soccer practice?")],
+        [calls("delete_event", event_id="evt_soccer"), says("Deleted.")],
+        events=[_soccer()],
+    )
+    first = ask(deps, "cancel soccer")
+    second = ask(deps, "yes", history=first.history, confirm=_approve(first.pending))
+
+    assert repo.get(HOUSEHOLD, "evt_soccer").is_deleted is True
+    # Exactly one write in the audit trail: the replay. The model's re-issue hit
+    # the settled guard and produced no second outcome.
+    assert [(a.tool, a.status) for a in second.actions] == [("delete_event", "ok")]
+
+
+def test_an_approved_update_replays_with_its_original_arguments() -> None:
+    _, deps, repo = harness(
+        [
+            calls("update_event", event_id="evt_soccer", start="2026-08-06T17:00"),
+            says("Move soccer to 5:00 PM?"),
+        ],
+        [says("Moved.")],  # the model does not re-issue the call
+        events=[_soccer()],
+    )
+    first = ask(deps, "move soccer to 5", actor=SAM)
+    assert first.pending is not None
+    assert first.pending.args == {"event_id": "evt_soccer", "start": "2026-08-06T17:00"}
+
+    second = ask(
+        deps, "yes", actor=SAM, history=first.history, confirm=_approve(first.pending)
+    )
+
+    assert repo.get(HOUSEHOLD, "evt_soccer").start_utc == datetime(2026, 8, 6, 21, 0, tzinfo=UTC)
+    assert [(a.tool, a.status) for a in second.actions] == [("update_event", "ok")]
+
+
+def test_a_decline_is_recorded_without_the_model_reissuing_the_call() -> None:
+    _, deps, repo = harness(
+        [calls("delete_event", event_id="evt_soccer"), says("Delete soccer practice?")],
+        [says("Okay, left it alone.")],
+        events=[_soccer()],
+    )
+    first = ask(deps, "cancel soccer")
+    decline = Confirmation(
+        call_id=first.pending.call_id,
+        approved=False,
+        tool=first.pending.tool,
+        args=dict(first.pending.args),
+    )
+    second = ask(deps, "no, leave it", history=first.history, confirm=decline)
+
+    assert repo.get(HOUSEHOLD, "evt_soccer").is_deleted is False
+    assert [(a.tool, a.status, a.detail) for a in second.actions] == [
+        ("delete_event", "error", "declined")
+    ]
+
+
 # --- refusals and caching ----------------------------------------------------
 
 

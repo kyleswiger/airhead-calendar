@@ -155,8 +155,14 @@ def agent_turn(
         # reads naturally ("Yes - go ahead."); it is also the field an attacker can
         # influence, and a gate that can be talked past is not a gate. It is recorded,
         # never interpreted.
+        # The gated call's tool and arguments come from the *stored* pending call,
+        # never from the request body: what an approval authorizes — and what the
+        # harness now replays directly — is exactly the call the person was shown.
         confirmation = runner.Confirmation(
-            call_id=body.confirm.call_id, approved=body.confirm.approved
+            call_id=body.confirm.call_id,
+            approved=body.confirm.approved,
+            tool=pending.tool,
+            args=dict(pending.args),
         )
 
     request = runner.TurnRequest(
@@ -252,4 +258,5 @@ def _pending_call(pending: Any) -> PendingCall | None:
         tool=pending.tool,
         summary=pending.summary,
         event_id=pending.event_id,
+        args=dict(getattr(pending, "args", None) or {}),
     )

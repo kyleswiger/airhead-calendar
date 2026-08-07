@@ -25,6 +25,7 @@ from airhead.agent.tools import (
     ToolContext,
     ToolOutcome,
     build_tools,
+    settle_confirmation,
 )
 from airhead.domain import Member
 from airhead.repo.base import EventRepo, MemberRepo
@@ -101,6 +102,12 @@ def run_turn(request: TurnRequest, *, deps: AgentDeps) -> TurnResult:
         confirm=request.confirm,
     )
 
+    # An answered gate is settled *before* the model runs: the harness replays
+    # an approved write itself, with the arguments that were approved, so the
+    # write no longer depends on the model choosing to re-issue the call. The
+    # model is told the outcome below and only narrates it.
+    settled = settle_confirmation(ctx)
+
     messages: list[dict] = [
         *request.history,
         {
@@ -110,7 +117,7 @@ def run_turn(request: TurnRequest, *, deps: AgentDeps) -> TurnResult:
                 now=request.now,
                 tz=request.tz,
                 actor=request.actor,
-                confirmation=_confirmation_note(request.confirm),
+                confirmation=_confirmation_note(request.confirm, settled),
             ),
         },
     ]
@@ -167,16 +174,30 @@ def run_turn(request: TurnRequest, *, deps: AgentDeps) -> TurnResult:
     return result
 
 
-def _confirmation_note(confirm: Confirmation | None) -> str | None:
-    """Tell the model the gate was answered. The tools decide what that means.
+def _confirmation_note(confirm: Confirmation | None, settled: ToolOutcome | None) -> str | None:
+    """Tell the model the gate was answered and what the harness did about it.
 
     This is narration for the conversation only — the authoritative copy of the
-    answer is on `ToolContext`, which is what actually unlocks the write.
+    answer is on `ToolContext`, and by the time the model reads this the write
+    (or its refusal) has already happened in `settle_confirmation`.
     """
     if confirm is None:
         return None
     verdict = "approved" if confirm.approved else "declined"
-    return f"the person {verdict} the pending request {confirm.call_id}"
+    note = f"the person {verdict} the pending request {confirm.call_id}"
+    if settled is None:
+        return note
+    if settled.status == "ok":
+        return (
+            f"{note}; the system has already applied it. Do not call the tool "
+            "again — just tell them it is done."
+        )
+    if settled.detail == "declined":
+        return f"{note}; nothing was changed. Do not call the tool again."
+    return (
+        f"{note}; the system tried to apply it but the change failed "
+        f"({settled.detail or 'error'}). Do not retry the call — tell them it did not work."
+    )
 
 
 def _reply(message: Any) -> str:

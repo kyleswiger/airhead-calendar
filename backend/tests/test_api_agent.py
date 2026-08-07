@@ -35,6 +35,8 @@ from fakes import ROSTER, as_member, build_client
 class Confirmation:
     call_id: str
     approved: bool
+    tool: str | None = None
+    args: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -62,6 +64,7 @@ class PendingConfirmation:
     tool: str
     summary: str
     event_id: str | None = None
+    args: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -138,6 +141,7 @@ def gate(call_id: str = "call_a") -> TurnResult:
             tool="delete_event",
             summary='Delete "Soccer practice" on Thursday at 4:00 PM?',
             event_id="evt_1",
+            args={"event_id": "evt_1"},
         ),
         history=[{"role": "user", "content": "delete soccer"}],
     )
@@ -340,7 +344,14 @@ class TestConfirmation:
         )
         assert r.status_code == 200
         assert r.json()["actions"][0]["status"] == "ok"
-        assert harness.runner.last.confirm == Confirmation(call_id="call_a", approved=True)
+        # The stored pending call's tool and args ride along, so the runner can
+        # replay the approved write itself — the client never supplies them.
+        assert harness.runner.last.confirm == Confirmation(
+            call_id="call_a",
+            approved=True,
+            tool="delete_event",
+            args={"event_id": "evt_1"},
+        )
 
     def test_the_decision_ignores_the_prose_beside_it(self, gated):
         # The display sends conversational filler so the transcript reads naturally.
