@@ -1,0 +1,26 @@
+# Secret-scanning rules for airhead-calendar.
+#
+# Consumed by .github/workflows/secret-scan.yml (pinned gitleaks), which is
+# the pre-merge blocking gate. GitHub's native secret scanning + push
+# protection is also enabled (public repo), but it alerts rather than gates,
+# and its ruleset is provider tokens only.
+#
+# The gitleaks default ruleset does the heavy lifting for provider-formatted
+# tokens (AWS keys, GitHub PATs, Anthropic keys, private keys, ...). It is
+# extended, not replaced.
+#
+# House rule this file enforces by existing: false positives get a
+# `gitleaks:allow` comment on the offending line, or a scoped allowlist entry
+# here with a comment saying why - never a disabled workflow.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Deliberate non-secrets in a genericized public tree"
+paths = [
+  # Placeholder-only examples; the real values live in gitignored files on
+  # the deploy machine (infra/backend.hcl, infra/terraform.tfvars).
+  '''infra/backend\.hcl\.example''',
+  '''infra/terraform\.tfvars\.example''',
+]
