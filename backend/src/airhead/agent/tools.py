@@ -115,10 +115,11 @@ class ToolContext:
     confirm: Confirmation | None = None
     outcomes: list[ToolOutcome] = field(default_factory=list)
     pending: PendingConfirmation | None = None
-    # Call ids whose gate answer has already been acted on this turn — the
-    # double-execution guard. A model that re-issues an applied call gets a
-    # "already handled" tool result instead of a second write.
-    settled: set[str] = field(default_factory=set)
+    # Call ids whose gate answer has already been acted on this turn, mapped to
+    # the outcome that was recorded — the double-execution guard. A model that
+    # re-issues a settled call gets a tool result describing what actually
+    # happened (applied, declined, or failed) instead of a second write.
+    settled: dict[str, ToolOutcome | None] = field(default_factory=dict)
 
 
 # --- confirmation gate -------------------------------------------------------
@@ -142,6 +143,10 @@ class _Declined(Exception):
 
 class _AlreadySettled(Exception):
     """The gate's answer was already acted on this turn; nothing more to do."""
+
+    def __init__(self, outcome: ToolOutcome | None = None) -> None:
+        super().__init__()
+        self.outcome = outcome
 
 
 class _Pending(Exception):
@@ -169,7 +174,7 @@ def _gate(
     harness replays approvals itself — never applies twice.
     """
     if call_id in ctx.settled:
-        raise _AlreadySettled
+        raise _AlreadySettled(ctx.settled[call_id])
     confirm = ctx.confirm
     if confirm is not None and confirm.call_id == call_id:
         if confirm.approved:
@@ -512,7 +517,7 @@ def _update_event(
         "update_event", event_id, json.dumps(fields, sort_keys=True, default=str)
     )
     if same_call in ctx.settled:
-        raise _AlreadySettled
+        raise _AlreadySettled(ctx.settled[same_call])
 
     if stored.owner_member_id != ctx.actor.member_id:
         # Editing somebody else's calendar is a gate — the patch is part of the
@@ -573,7 +578,7 @@ def _delete_event(ctx: ToolContext, event_id: str) -> str:
     # Before the load: a replayed delete removed the event, so a model re-issue
     # would otherwise read as "no such event" instead of "already done".
     if call_id_for("delete_event", event_id) in ctx.settled:
-        raise _AlreadySettled
+        raise _AlreadySettled(ctx.settled[call_id_for("delete_event", event_id)])
     stored = _visible(ctx, event_id)
     ensure_may_delete(ctx.actor, stored)
     _gate(
@@ -684,9 +689,19 @@ def _safe(ctx: ToolContext, tool: str, fn: Callable[[], str]) -> str:
     except _Declined:
         ctx.outcomes.append(ToolOutcome(tool=tool, status="error", detail="declined"))
         return "NOT DONE — the person declined this change."
-    except _AlreadySettled:
-        # No outcome: the settled answer was already recorded, and a duplicate
-        # row in the audit log would claim a second write that never happened.
+    except _AlreadySettled as settled:
+        # No new outcome: the settled answer was already recorded, and a
+        # duplicate row in the audit log would claim a second write that never
+        # happened. The message reflects what actually happened, so a declined
+        # or failed replay is never narrated as applied.
+        outcome = settled.outcome
+        if outcome is not None and outcome.status == "error":
+            if outcome.detail == "declined":
+                return "NOT DONE — the person declined this change. Do not repeat this call."
+            return (
+                "NOT DONE — the system already tried to apply this change and it "
+                "failed. Do not repeat this call."
+            )
         return (
             "Already handled — the person's answer to this request was applied "
             "by the system. Do not repeat this call."
@@ -717,7 +732,7 @@ def settle_confirmation(ctx: ToolContext) -> ToolOutcome | None:
     before = len(ctx.outcomes)
     if not confirm.approved:
         ctx.outcomes.append(ToolOutcome(tool=confirm.tool, status="error", detail="declined"))
-        ctx.settled.add(confirm.call_id)
+        ctx.settled[confirm.call_id] = ctx.outcomes[-1]
         return ctx.outcomes[-1]
 
     args = confirm.args or {}
@@ -734,18 +749,23 @@ def settle_confirmation(ctx: ToolContext) -> ToolOutcome | None:
             args.get("involves"),
         ),
     }
+    if "event_id" not in args:
+        # A pending row persisted before args were stored loads back with
+        # args={} — nothing safe to replay. Fall back to the legacy path (do
+        # not settle), so the model's re-issue can still carry the write.
+        return None
+
     fn = replays.get(confirm.tool)
     if fn is None:
-        ctx.outcomes.append(
-            ToolOutcome(tool=confirm.tool, status="error", detail="unreplayable")
-        )
+        ctx.outcomes.append(ToolOutcome(tool=confirm.tool, status="error", detail="unreplayable"))
     else:
         # `_safe` records the error outcome before raising ToolError; there is
         # no model here to read the message, so the exception is the noise.
         with contextlib.suppress(ToolError):
             _safe(ctx, confirm.tool, fn)
-    ctx.settled.add(confirm.call_id)
-    return ctx.outcomes[before] if len(ctx.outcomes) > before else None
+    outcome = ctx.outcomes[before] if len(ctx.outcomes) > before else None
+    ctx.settled[confirm.call_id] = outcome
+    return outcome
 
 
 def build_tools(ctx: ToolContext) -> list[Any]:

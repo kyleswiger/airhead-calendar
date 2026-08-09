@@ -472,9 +472,7 @@ def test_an_approved_update_replays_with_its_original_arguments() -> None:
     assert first.pending is not None
     assert first.pending.args == {"event_id": "evt_soccer", "start": "2026-08-06T17:00"}
 
-    second = ask(
-        deps, "yes", actor=SAM, history=first.history, confirm=_approve(first.pending)
-    )
+    second = ask(deps, "yes", actor=SAM, history=first.history, confirm=_approve(first.pending))
 
     assert repo.get(HOUSEHOLD, "evt_soccer").start_utc == datetime(2026, 8, 6, 21, 0, tzinfo=UTC)
     assert [(a.tool, a.status) for a in second.actions] == [("update_event", "ok")]
