@@ -81,10 +81,12 @@ jobs:
 
       - name: Zip
         # Terraform zips this directory itself via archive_file; out-of-band
-        # code deploys have to produce the same shape by hand. The mtimes are
-        # already flattened by build-lambda.sh, so the artifact is a pure
-        # function of its contents and Terraform's next plan converges on the
-        # same hash instead of proposing a redeploy of identical code.
+        # code deploys have to produce the same shape by hand. Info-ZIP and
+        # Terraform's Go zip writer do NOT produce identical bytes for the
+        # same tree, so a CI deploy always leaves CodeSha256 differing from
+        # archive_file's hash — which is why infra/lambda.tf ignores
+        # filename/source_code_hash changes on both functions: CI owns code
+        # deploys, terraform owns everything else.
         run: cd backend/build/api && zip -qr ../api.zip .
 
       - name: Update api function
@@ -102,17 +104,27 @@ jobs:
         # not a failed deploy. The first `terraform apply` in infra/ creates
         # it, and every deploy after that updates it.
         run: |
-          if aws lambda get-function --function-name airhead-agent \
-              --query Configuration.FunctionName --output text >/dev/null 2>&1; then
+          set +e
+          err="$(aws lambda get-function --function-name airhead-agent \
+                   --query Configuration.FunctionName --output text 2>&1 >/dev/null)"
+          rc=$?
+          set -e
+          if [[ $rc -eq 0 ]]; then
             aws lambda update-function-code \
               --function-name airhead-agent \
               --zip-file fileb://backend/build/api.zip \
               --query '{Function: FunctionName, Sha256: CodeSha256}' --output table
             aws lambda wait function-updated-v2 --function-name airhead-agent
-          else
+          elif grep -q "ResourceNotFoundException" <<<"$err"; then
+            # Only a genuine not-found is skippable. Throttling, AccessDenied,
+            # or a broken OIDC session must fail the deploy — otherwise the
+            # agent silently stays on stale code while the run reports green.
             echo "::warning::airhead-agent does not exist yet (M2 infra not applied)." \
                  "Skipping - run 'terraform apply' in infra/ to create it;" \
                  "the next deploy will pick it up."
+          else
+            echo "::error::could not determine whether airhead-agent exists: ${err}"
+            exit 1
           fi
 
   frontend:
@@ -172,8 +184,19 @@ jobs:
         # Vite inlines VITE_* at build time; an unset VITE_API_BASE does not
         # fail the build, it silently ships the bundled sample fixture. The
         # resolve step above hard-fails first, so that cannot happen here.
+        #
+        # The AWS deploy credentials are blanked for this step: npm ci runs
+        # every dependency's install scripts and npm run build executes Vite
+        # plugin code from node_modules, so a compromised transitive package
+        # here must not be able to read credentials that can write to the
+        # production Lambda/S3. The sync/invalidate steps below still see the
+        # job-level credentials untouched.
         env:
           VITE_API_BASE: ${{ steps.targets.outputs.api_base }}
+          AWS_ACCESS_KEY_ID: ""
+          AWS_SECRET_ACCESS_KEY: ""
+          AWS_SESSION_TOKEN: ""
+          AWS_DEFAULT_REGION: ""
         run: cd frontend && npm ci && npm run build
 
       - name: Sync to S3
