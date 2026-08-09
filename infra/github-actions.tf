@@ -24,7 +24,14 @@ module "github_actions" {
   # trigger), so the trust policy does not include the module's default
   # `pull_request` claim: a PR from this repo cannot assume the role at all.
   # PR-time CI (fmt/validate/tests) needs no AWS credentials by design.
+  # Both subject formats: this repo's tokens carry GitHub's immutable sub
+  # claim (account and repo IDs embedded — verify with
+  # `gh api /repos/kyleswiger/airhead-calendar/actions/oidc/customization/sub`),
+  # while the plain form stays as a belt-and-suspenders match should the
+  # customization ever revert. The IDs are immutable, so a rename or a
+  # squatted replacement repo cannot satisfy the first claim.
   subject_claims = [
+    "repo:kyleswiger@5436172/airhead-calendar@1319624799:ref:refs/heads/main",
     "repo:kyleswiger/airhead-calendar:ref:refs/heads/main",
   ]
 
