@@ -82,8 +82,9 @@ class TurnResult:
 class AgentDeps:
     events: EventRepo
     members: MemberRepo
-    client: Any  # An Anthropic client; injected so tests can fake it.
-    model: str = "claude-opus-5"
+    # An Anthropic client (AnthropicBedrockMantle in prod); injected so tests can fake it.
+    client: Any
+    model: str = "us.anthropic.claude-opus-5"
     effort: str = "medium"
     # Caps thinking *plus* visible text on Opus 5. Sized for the thinking, not
     # for the two sentences the kitchen screen shows.
