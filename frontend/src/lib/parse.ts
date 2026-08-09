@@ -18,6 +18,7 @@ import type {
   AgentUsage,
   BusyRow,
   EventRow,
+  EventStatus,
   Member,
   MemberRole,
   PendingConfirmation,
@@ -59,6 +60,7 @@ const TIERS: readonly Tier[] = ["T1", "T2", "T3"];
 const TIER_SOURCES: readonly TierSource[] = ["auto", "human"];
 const ROLES: readonly MemberRole[] = ["adult", "minor"];
 const VISIBILITIES: readonly Visibility[] = ["all", "adults"];
+const STATUSES: readonly EventStatus[] = ["proposed", "confirmed"];
 
 export function parseMember(value: unknown): Member | null {
   if (!isRecord(value)) return null;
@@ -101,6 +103,8 @@ function parseEventRow(value: Record<string, unknown>): EventRow | null {
     visibility: asOneOf(value["visibility"], VISIBILITIES, "all"),
     // Recompute rather than trust: the chip must agree with what is on screen.
     isFamily: asBoolean(value["isFamily"], false) || (memberIds.length > 1 && tier === "T1"),
+    // Older responses omit it; absent means confirmed, exactly as the API defaults.
+    status: asOneOf(value["status"], STATUSES, "confirmed"),
   };
 
   const optional: Pick<EventRow, "location" | "occurrenceId" | "startUtc"> = {};

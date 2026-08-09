@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
-from airhead.domain import Event, Member, Tier, TierSource, Visibility
+from airhead.domain import Event, EventStatus, Member, Tier, TierSource, Visibility
 from airhead.recurrence import expand, occurrence_id, to_floating
 from airhead.repo.base import TIER_ORDER
 
@@ -39,6 +39,7 @@ class EventRow:
     member_ids: tuple[str, ...]
     location: str | None
     visibility: Visibility
+    status: EventStatus
     is_family: bool
     occurrence_id: str | None
 
@@ -162,6 +163,7 @@ def _place(
                 member_ids=member_ids,
                 location=inst.location,
                 visibility=inst.visibility,
+                status=inst.status,
                 is_family=inst.tier is Tier.HOUSEHOLD and len(member_ids) > 1,
                 occurrence_id=(
                     occurrence_id(inst.event_id, inst.start_utc)

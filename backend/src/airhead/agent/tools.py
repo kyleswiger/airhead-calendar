@@ -38,10 +38,11 @@ from airhead.api.app import (
     span_utc,
     to_local,
 )
-from airhead.api.errors import ApiError, Forbidden, InvalidRequest, NotFound
+from airhead.api.errors import ApiError, Conflict, Forbidden, InvalidRequest, NotFound
 from airhead.domain import (
     Event,
     EventSource,
+    EventStatus,
     Member,
     SourceKind,
     Tier,
@@ -271,6 +272,7 @@ def _row(ctx: ToolContext, event: Event) -> dict[str, Any]:
         "memberIds": sorted({event.owner_member_id, *event.involves}),
         "location": event.location,
         "visibility": event.visibility.value,
+        "status": event.status.value,
         "mergeGroupId": event.merge_group_id,
     }
 
@@ -406,8 +408,19 @@ def _create_event(
     visibility: str | None,
 ) -> str:
     owner = owner_member_id or ctx.actor.member_id
+    # Issue #4, resolved: same rule as POST /api/events. A minor creating for someone
+    # else lands a `proposed` event; an adult confirms it (or deletes it) on screen.
+    # Not routed through the turn gate on purpose - the gate is answered by whoever
+    # holds the conversation, which here is the minor, and a proposal a minor can
+    # approve for themselves is not adult confirmation.
+    status = EventStatus.CONFIRMED
+    note = "Created."
     if not ctx.actor.is_adult and owner != ctx.actor.member_id:
-        raise Forbidden("Minors may only create their own events.")
+        status = EventStatus.PROPOSED
+        note = (
+            "Created as a proposal - an adult must confirm it before it is final. "
+            "Tell the person that in one short sentence."
+        )
     if visibility is not None:
         ensure_may_set_visibility(ctx.actor)
     _check_members(ctx, [owner], "owner_member_id")
@@ -441,9 +454,27 @@ def _create_event(
         # PATCH — otherwise the next sync "corrects" it away.
         tier_source=TierSource.HUMAN,
         visibility=Visibility(visibility) if visibility else Visibility.ALL,
+        status=status,
         created_by=ctx.actor.member_id,
     )
-    return _saved(ctx, event, "create_event", "Created.")
+    return _saved(ctx, event, "create_event", note)
+
+
+def _confirm_event(ctx: ToolContext, event_id: str) -> str:
+    """Mirror of `POST /api/events/{id}/confirm` (issue #4).
+
+    Adult-only by role, not by gate: the turn gate is answered by whoever holds
+    the conversation, and a minor holding it could approve their own proposal.
+    The adult check is therefore on the actor's identity, which is
+    server-injected and not in any tool schema.
+    """
+    if not ctx.actor.is_adult:
+        raise Forbidden("Only adults may confirm a proposed event.")
+    stored = _visible(ctx, event_id)
+    if stored.status is not EventStatus.PROPOSED:
+        raise Conflict("Event is not awaiting confirmation.", code="not_proposed")
+    stored.status = EventStatus.CONFIRMED
+    return _saved(ctx, stored, "confirm_event", "Confirmed.")
 
 
 def _update_event(
@@ -713,7 +744,9 @@ def build_tools(ctx: ToolContext) -> list[Any]:
         deliberately: T1 if it constrains somebody else (a pickup, a drive, a
         shared meal), T2 for a personal commitment, T3 for work or focus time.
         Owner defaults to the person speaking, so pass owner_member_id only when
-        the event is really somebody else's.
+        the event is really somebody else's. When a minor creates an event for
+        someone else it is stored as a proposal an adult must confirm; relay
+        that when it happens.
 
         Args:
             title: What the event is, in the household's own words.
@@ -744,6 +777,19 @@ def build_tools(ctx: ToolContext) -> list[Any]:
                 visibility,
             ),
         )
+
+    @beta_tool
+    def confirm_event(event_id: str) -> str:
+        """Confirm an event a minor proposed for someone else.
+
+        Adults only. Call this when an adult approves a proposed event — one
+        get_agenda reports with status "proposed". An adult who disagrees
+        deletes the proposal instead; there is no separate decline.
+
+        Args:
+            event_id: The id from get_agenda.
+        """
+        return _safe(ctx, "confirm_event", lambda: _confirm_event(ctx, event_id))
 
     @beta_tool
     def update_event(
@@ -843,6 +889,7 @@ def build_tools(ctx: ToolContext) -> list[Any]:
     # Stable order: the tool list renders ahead of the system prompt, so a
     # reshuffle here silently invalidates the whole cached prefix.
     return [
+        confirm_event,
         create_event,
         delete_event,
         find_conflicts,

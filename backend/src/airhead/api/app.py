@@ -28,6 +28,7 @@ from airhead.api.agent import router as agent_router
 from airhead.api.deps import Actor, Events, HouseholdId, Members, Tz, get_actor
 from airhead.api.errors import (
     BadRequest,
+    Conflict,
     Forbidden,
     InvalidRequest,
     NotFound,
@@ -46,7 +47,16 @@ from airhead.api.schemas import (
     RangeOut,
     fmt_local,
 )
-from airhead.domain import Event, EventSource, Member, SourceKind, Tier, TierSource, Visibility
+from airhead.domain import (
+    Event,
+    EventSource,
+    EventStatus,
+    Member,
+    SourceKind,
+    Tier,
+    TierSource,
+    Visibility,
+)
 from airhead.repo.base import AgendaQuery, EventRepo, MemberRepo
 
 MAX_SPAN_DAYS = 31
@@ -220,6 +230,7 @@ def event_row(event: Event, tz: str) -> EventRowOut:
         member_ids=member_ids,
         location=event.location,
         visibility=event.visibility,
+        status=event.status,
         is_family=len(member_ids) > 1 and event.tier is Tier.HOUSEHOLD,
         occurrence_id=None,
     )
@@ -369,6 +380,7 @@ def get_agenda(
                     member_ids=list(row.member_ids),
                     location=row.location,
                     visibility=row.visibility,
+                    status=row.status,
                     is_family=row.is_family,
                     occurrence_id=row.occurrence_id,
                 )
@@ -408,11 +420,14 @@ def create_event(
     tz: Tz,
 ) -> EventRowOut:
     owner = body.owner_member_id or actor.member_id
-    # TODO(open-question): may a minor create an event *for* another member (e.g. Riley
-    # putting "pick me up at 6" on a parent)? Pending a decision with the household
-    # owner; until then a minor may only create their own events.
+    # Issue #4, resolved: a minor MAY create an event for another member ("pick me up
+    # at 6" on a parent), but it lands as a `proposed` event that any adult confirms
+    # via POST /api/events/{id}/confirm. Consistent with PRD §6.2, which reserves the
+    # binding moves for adults ("Minors additionally cannot: change another member's
+    # events, ..."): the proposal never silently becomes another member's commitment.
+    status = EventStatus.CONFIRMED
     if not actor.is_adult and owner != actor.member_id:
-        raise Forbidden("Minors may only create their own events.")
+        status = EventStatus.PROPOSED
     if body.visibility is not None:
         ensure_may_set_visibility(actor)
 
@@ -451,10 +466,18 @@ def create_event(
             # the first sync would "correct" a deliberate choice back to auto.
             tier_source=TierSource.HUMAN if body.tier is not None else TierSource.AUTO,
             visibility=body.visibility or Visibility.ALL,
+            status=status,
             created_by=actor.member_id,
         )
     )
-    log.info("event_created", extra={"event_id": stored.event_id, "actor": actor.member_id})
+    log.info(
+        "event_created",
+        extra={
+            "event_id": stored.event_id,
+            "actor": actor.member_id,
+            "status": stored.status.value,
+        },
+    )
     return event_row(stored, tz)
 
 
@@ -538,6 +561,27 @@ def patch_event(
             "fields": sorted(fields),
         },
     )
+    return event_row(saved, tz)
+
+
+@app.post("/api/events/{event_id}/confirm", response_model=EventRowOut)
+def confirm_event(
+    event_id: str, actor: Actor, events: Events, household_id: HouseholdId, tz: Tz
+) -> EventRowOut:
+    """Turn a minor's proposal into a confirmed event. Adults only (issue #4).
+
+    Approval is any adult's, not a specific one's — mirroring the agent gate, where
+    the adult at the screen answers. Declining is not a separate verb: an adult who
+    disagrees deletes the proposal, and a minor can delete what they created.
+    """
+    if not actor.is_adult:
+        raise Forbidden("Only adults may confirm a proposed event.")
+    stored = _load_visible(events, actor, household_id, event_id)
+    if stored.status is not EventStatus.PROPOSED:
+        raise Conflict("Event is not awaiting confirmation.", code="not_proposed")
+    stored.status = EventStatus.CONFIRMED
+    saved = events.put(stored)
+    log.info("event_confirmed", extra={"event_id": event_id, "actor": actor.member_id})
     return event_row(saved, tz)
 
 

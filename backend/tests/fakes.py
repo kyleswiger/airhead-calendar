@@ -18,6 +18,7 @@ from airhead.api.app import app
 from airhead.domain import (
     Event,
     EventSource,
+    EventStatus,
     Member,
     MemberRole,
     Source,
@@ -147,6 +148,7 @@ def make_event(
     all_day: bool = False,
     created_by: str | None = None,
     location: str | None = None,
+    status: EventStatus = EventStatus.CONFIRMED,
 ) -> Event:
     return Event(
         event_id=event_id,
@@ -163,6 +165,7 @@ def make_event(
         tier=tier,
         tier_source=tier_source,
         visibility=visibility,
+        status=status,
         created_by=created_by or owner,
     )
 

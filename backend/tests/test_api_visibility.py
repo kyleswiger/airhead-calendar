@@ -154,7 +154,8 @@ class TestMinorWrites:
         r = client.delete("/api/events/evt_riley_made", headers=as_member("mem_riley"))
         assert r.status_code == 204
 
-    def test_cannot_create_for_another_member(self, seeded):
+    def test_creating_for_another_member_lands_a_proposal(self, seeded):
+        # Issue #4: allowed, but only as a `proposed` event an adult must confirm.
         client, _ = seeded
         r = client.post(
             "/api/events",
@@ -166,7 +167,8 @@ class TestMinorWrites:
                 "ownerMemberId": "mem_alex",
             },
         )
-        assert r.status_code == 403
+        assert r.status_code == 201
+        assert r.json()["status"] == "proposed"
 
     def test_cannot_create_an_adults_only_event(self, seeded):
         client, _ = seeded

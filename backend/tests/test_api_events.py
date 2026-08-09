@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from airhead.domain import Tier, TierSource, Visibility
+from airhead.domain import EventStatus, Tier, TierSource, Visibility
 from fakes import HOUSEHOLD, as_member, build_client, make_event
 
 
@@ -119,6 +119,37 @@ class TestCreate:
             },
         )
         assert events.get(HOUSEHOLD, r.json()["eventId"]).tier_source is TierSource.HUMAN
+
+    def test_minor_creating_their_own_event_is_confirmed(self, seeded):
+        client, events, _ = seeded
+        r = client.post(
+            "/api/events",
+            headers=as_member("mem_riley"),
+            json={
+                "title": "Band practice",
+                "startLocal": "2026-08-07T15:00:00",
+                "endLocal": "2026-08-07T16:00:00",
+            },
+        )
+        assert r.status_code == 201
+        assert r.json()["status"] == "confirmed"
+        assert events.get(HOUSEHOLD, r.json()["eventId"]).status is EventStatus.CONFIRMED
+
+    def test_adult_creating_for_anyone_is_confirmed(self, seeded):
+        client, events, _ = seeded
+        r = client.post(
+            "/api/events",
+            headers=as_member("mem_alex"),
+            json={
+                "title": "Soccer pickup",
+                "startLocal": "2026-08-07T18:00:00",
+                "endLocal": "2026-08-07T18:30:00",
+                "ownerMemberId": "mem_riley",
+            },
+        )
+        assert r.status_code == 201
+        assert r.json()["status"] == "confirmed"
+        assert events.get(HOUSEHOLD, r.json()["eventId"]).status is EventStatus.CONFIRMED
 
     def test_end_before_start_is_422(self, seeded):
         client, _, _ = seeded
@@ -269,3 +300,66 @@ class TestPreflight:
         every cross-origin call before the real request was ever made."""
         client, _, _ = seeded
         assert client.options("/api/events/evt_soccer").status_code == 204
+
+
+class TestMinorProposal:
+    """Issue #4: a minor creating an event for another member lands a proposal.
+
+    PRD §6.2 keeps the binding moves adult-only; a proposal that only an adult
+    can turn into a confirmed event is the ask without the authority.
+    """
+
+    PICKUP = {
+        "title": "Pick me up at 6",
+        "startLocal": "2026-08-07T18:00:00",
+        "endLocal": "2026-08-07T18:15:00",
+        "ownerMemberId": "mem_alex",
+    }
+
+    def _propose(self, client):
+        r = client.post("/api/events", headers=as_member("mem_riley"), json=self.PICKUP)
+        assert r.status_code == 201
+        return r.json()
+
+    def test_minor_creating_for_a_parent_is_a_pending_proposal(self, seeded):
+        client, events, _ = seeded
+        row = self._propose(client)
+        assert row["status"] == "proposed"
+        assert row["ownerMemberId"] == "mem_alex"
+        stored = events.get(HOUSEHOLD, row["eventId"])
+        assert stored.status is EventStatus.PROPOSED
+        assert stored.created_by == "mem_riley"
+
+    def test_proposal_is_not_shown_as_confirmed_until_an_adult_approves(self, seeded):
+        client, _, _ = seeded
+        row = self._propose(client)
+        fetched = client.get(f"/api/events/{row['eventId']}", headers=as_member("mem_alex")).json()
+        assert fetched["status"] == "proposed"
+
+    def test_adult_confirms_the_proposal(self, seeded):
+        client, events, _ = seeded
+        row = self._propose(client)
+        r = client.post(f"/api/events/{row['eventId']}/confirm", headers=as_member("mem_alex"))
+        assert r.status_code == 200
+        assert r.json()["status"] == "confirmed"
+        assert events.get(HOUSEHOLD, row["eventId"]).status is EventStatus.CONFIRMED
+
+    def test_minor_cannot_confirm(self, seeded):
+        client, events, _ = seeded
+        row = self._propose(client)
+        r = client.post(f"/api/events/{row['eventId']}/confirm", headers=as_member("mem_riley"))
+        assert r.status_code == 403
+        assert events.get(HOUSEHOLD, row["eventId"]).status is EventStatus.PROPOSED
+
+    def test_confirming_a_confirmed_event_is_409(self, seeded):
+        client, _, _ = seeded
+        r = client.post("/api/events/evt_soccer/confirm", headers=as_member("mem_alex"))
+        assert r.status_code == 409
+        assert r.json()["error"]["code"] == "not_proposed"
+
+    def test_minor_can_delete_their_own_proposal(self, seeded):
+        # `created_by` is the delete rule, so a minor can withdraw the ask.
+        client, _, _ = seeded
+        row = self._propose(client)
+        r = client.delete(f"/api/events/{row['eventId']}", headers=as_member("mem_riley"))
+        assert r.status_code == 204

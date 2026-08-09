@@ -31,6 +31,17 @@ class Visibility(StrEnum):
     ADULTS = "adults"
 
 
+class EventStatus(StrEnum):
+    """Whether an event is settled or still a proposal.
+
+    A minor creating an event *for* another member (issue #4) lands it as
+    `proposed`; any adult confirms it. Everything else is `confirmed` at birth.
+    """
+
+    CONFIRMED = "confirmed"
+    PROPOSED = "proposed"
+
+
 class SourceKind(StrEnum):
     NATIVE = "native"  # Created in Airhead itself.
     GOOGLE = "google"
@@ -111,6 +122,9 @@ class Event:
     tier: Tier = Tier.PERSONAL
     tier_source: TierSource = TierSource.AUTO
     visibility: Visibility = Visibility.ALL
+    # Only ever `proposed` for a native event a minor created for someone else;
+    # synced events are facts, not proposals.
+    status: EventStatus = EventStatus.CONFIRMED
     merge_group_id: str | None = None
     recurrence_parent_id: str | None = None
     recurrence_id: str | None = None  # Original start of the instance this override replaces.
@@ -156,6 +170,7 @@ def apply_remote_update(existing: Event, incoming: Event) -> Event:
     incoming.event_id = existing.event_id
     incoming.merge_group_id = existing.merge_group_id
     incoming.visibility = existing.visibility
+    incoming.status = existing.status
     incoming.created_by = existing.created_by
 
     if keep_tier:

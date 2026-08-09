@@ -368,6 +368,14 @@ button {
   color: var(--bg);
 }
 
+/* An unconfirmed proposal must read as tentative at kitchen distance:
+   outlined rather than filled, so it can never be mistaken for FAMILY. */
+.chip--proposed {
+  background: transparent;
+  color: var(--fg);
+  border: 2px dashed currentColor;
+}
+
 /* ----------------------------------------------------------- busy band -- */
 
 .busy {

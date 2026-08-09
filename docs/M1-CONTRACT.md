@@ -58,6 +58,7 @@ Base path: `/api`. All JSON, `camelCase` on the wire, `snake_case` in Python.
           "location": "Riverside Park Field 3",
           "visibility": "all",
           "isFamily": true,                       // memberIds.length > 1 && tier == T1
+          "status": "confirmed",                  // "proposed" until an adult confirms (issue #4)
           "occurrenceId": "evt_01J...@2026-08-04T20:00:00Z"  // set on expanded instances
         },
         {
@@ -100,6 +101,11 @@ work, which is information).
   stamps `human` too** — a tier a person typed is a human tier, and if it were recorded as
   `auto` the first sync would quietly "correct" it back.
 - `DELETE /api/events/{eventId}` → `204`. Soft delete.
+- `POST /api/events/{eventId}/confirm` → `200` / `403` / `409 not_proposed`. Adults only.
+  Turns a minor's `proposed` event into a `confirmed` one. A minor creating an event whose
+  owner is somebody else gets `status: "proposed"`; the display shows it with a PROPOSED
+  chip until any adult confirms it (here, or via the assistant's `confirm_event` tool).
+  Declining is not a separate verb — an adult who disagrees deletes the proposal.
 
 Request and response deliberately differ on one field: a body sends **`involves`** (who else
 this constrains), a row returns **`memberIds`** (owner + involves, deduped, ordered to match
