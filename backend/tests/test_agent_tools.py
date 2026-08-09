@@ -164,6 +164,30 @@ def test_minor_creating_their_own_event_is_confirmed_at_birth() -> None:
     assert repo.get(HOUSEHOLD, ctx.outcomes[0].event_id).status is EventStatus.CONFIRMED
 
 
+def test_adult_confirms_a_proposal_through_the_tool() -> None:
+    proposal = soccer(status=EventStatus.PROPOSED, owner="mem_alex", created_by="mem_riley")
+    tools, ctx, repo = harness(ALEX, events=[proposal])
+    result = tools["confirm_event"].call({"event_id": "evt_soccer"})
+    assert "Confirmed" in result
+    assert repo.get(HOUSEHOLD, "evt_soccer").status is EventStatus.CONFIRMED
+    assert [o.status for o in ctx.outcomes] == ["ok"]
+    assert ctx.pending is None  # role check, not the conversational gate
+
+
+def test_minor_cannot_confirm_a_proposal() -> None:
+    proposal = soccer(status=EventStatus.PROPOSED)
+    tools, ctx, repo = harness(RILEY, events=[proposal])
+    with pytest.raises(ToolError, match="adults"):
+        tools["confirm_event"].call({"event_id": "evt_soccer"})
+    assert repo.get(HOUSEHOLD, "evt_soccer").status is EventStatus.PROPOSED
+
+
+def test_confirming_a_confirmed_event_is_refused() -> None:
+    tools, ctx, repo = harness(ALEX, events=[soccer()])
+    with pytest.raises(ToolError, match="not awaiting"):
+        tools["confirm_event"].call({"event_id": "evt_soccer"})
+
+
 def test_minor_may_edit_their_own_event_without_a_gate() -> None:
     tools, ctx, repo = harness(RILEY, events=[soccer()])
     tools["update_event"].call({"event_id": "evt_soccer", "location": "Field 3"})

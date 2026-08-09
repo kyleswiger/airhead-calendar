@@ -13,6 +13,8 @@ export type Tier = "T1" | "T2" | "T3";
 export type TierSource = "auto" | "human";
 export type MemberRole = "adult" | "minor";
 export type Visibility = "all" | "adults";
+/** A `proposed` event is a minor's suggestion awaiting an adult's confirmation. */
+export type EventStatus = "proposed" | "confirmed";
 
 export interface Member {
   memberId: string;
@@ -48,6 +50,11 @@ interface EventRowBase {
   visibility: Visibility;
   /** memberIds.length > 1 && tier === "T1" - drives the FAMILY chip. */
   isFamily: boolean;
+  /**
+   * "proposed" until an adult confirms (issue #4). The display must never show
+   * a proposal as settled - it renders with an explicit PROPOSED chip.
+   */
+  status: EventStatus;
   occurrenceId?: string;
   /** True instant. Present for ordering/debug; the display never positions with it. */
   startUtc?: string;

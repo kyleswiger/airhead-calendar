@@ -333,9 +333,7 @@ class TestMinorProposal:
     def test_proposal_is_not_shown_as_confirmed_until_an_adult_approves(self, seeded):
         client, _, _ = seeded
         row = self._propose(client)
-        fetched = client.get(
-            f"/api/events/{row['eventId']}", headers=as_member("mem_alex")
-        ).json()
+        fetched = client.get(f"/api/events/{row['eventId']}", headers=as_member("mem_alex")).json()
         assert fetched["status"] == "proposed"
 
     def test_adult_confirms_the_proposal(self, seeded):

@@ -84,6 +84,12 @@ export function EventRowItem({ event, members, onDate }: EventRowItemProps) {
 
       <div className="row__body">
         <div className="row__headline">
+          {/* A minor's proposal is never displayed as settled (issue #4): the
+              chip stays until an adult confirms - via the on-screen assistant
+              ("confirm the pickup") or POST /api/events/{id}/confirm. */}
+          {event.status === "proposed" ? (
+            <span className="chip chip--proposed">Proposed</span>
+          ) : null}
           {event.isFamily ? <span className="chip chip--family">Family</span> : null}
           <span className="row__title">{event.title}</span>
         </div>

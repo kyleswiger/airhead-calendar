@@ -38,7 +38,7 @@ from airhead.api.app import (
     span_utc,
     to_local,
 )
-from airhead.api.errors import ApiError, InvalidRequest, NotFound
+from airhead.api.errors import ApiError, Conflict, Forbidden, InvalidRequest, NotFound
 from airhead.domain import (
     Event,
     EventSource,
@@ -460,6 +460,23 @@ def _create_event(
     return _saved(ctx, event, "create_event", note)
 
 
+def _confirm_event(ctx: ToolContext, event_id: str) -> str:
+    """Mirror of `POST /api/events/{id}/confirm` (issue #4).
+
+    Adult-only by role, not by gate: the turn gate is answered by whoever holds
+    the conversation, and a minor holding it could approve their own proposal.
+    The adult check is therefore on the actor's identity, which is
+    server-injected and not in any tool schema.
+    """
+    if not ctx.actor.is_adult:
+        raise Forbidden("Only adults may confirm a proposed event.")
+    stored = _visible(ctx, event_id)
+    if stored.status is not EventStatus.PROPOSED:
+        raise Conflict("Event is not awaiting confirmation.", code="not_proposed")
+    stored.status = EventStatus.CONFIRMED
+    return _saved(ctx, stored, "confirm_event", "Confirmed.")
+
+
 def _update_event(
     ctx: ToolContext,
     event_id: str,
@@ -762,6 +779,19 @@ def build_tools(ctx: ToolContext) -> list[Any]:
         )
 
     @beta_tool
+    def confirm_event(event_id: str) -> str:
+        """Confirm an event a minor proposed for someone else.
+
+        Adults only. Call this when an adult approves a proposed event — one
+        get_agenda reports with status "proposed". An adult who disagrees
+        deletes the proposal instead; there is no separate decline.
+
+        Args:
+            event_id: The id from get_agenda.
+        """
+        return _safe(ctx, "confirm_event", lambda: _confirm_event(ctx, event_id))
+
+    @beta_tool
     def update_event(
         event_id: str,
         title: str | None = None,
@@ -859,6 +889,7 @@ def build_tools(ctx: ToolContext) -> list[Any]:
     # Stable order: the tool list renders ahead of the system prompt, so a
     # reshuffle here silently invalidates the whole cached prefix.
     return [
+        confirm_event,
         create_event,
         delete_event,
         find_conflicts,
