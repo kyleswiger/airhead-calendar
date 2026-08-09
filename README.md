@@ -100,32 +100,22 @@ the deployed API.
 
 ## M2: the agent
 
-M2 adds a second Lambda (`airhead-agent`), the `POST /api/agent/turn` route in front of
-it, a KMS key, and an SSM `SecureString` parameter holding the Anthropic API key.
+M2 adds a second Lambda (`airhead-agent`) and the `POST /api/agent/turn` route in front
+of it. The agent calls Claude Opus 5 through **AWS Bedrock** (`AnthropicBedrockMantle`
+in the `anthropic` SDK, model id `us.anthropic.claude-opus-5`), authenticated with the
+Lambda role's own SigV4 credentials.
 
-**The key is not in Terraform.** Terraform creates the parameter with a placeholder and
-then stops looking at the value (`ignore_changes`), so the real key never enters a plan,
-a `.tfvars`, or the state file. You put it there once, by hand, after the first apply:
-
-```bash
-cd infra
-terraform apply
-
-aws ssm put-parameter \
-  --name "$(terraform output -raw anthropic_api_key_parameter_name)" \
-  --key-id "$(terraform output -raw secrets_kms_key_id)" \
-  --type SecureString --overwrite \
-  --value "sk-ant-..."
-```
-
-Pass `--key-id`. `--overwrite` without it can land the value under a different key than
-the agent role is allowed to decrypt, and the first turn then fails with an AccessDenied
-that names KMS rather than the mistake.
+**There is no API key.** No SSM parameter, no KMS key, no out-of-band `put-parameter`
+step — access is the `bedrock:InvokeModel*` grant on the agent role in `iam.tf`, and
+model spend appears on the AWS bill. The one prerequisite outside Terraform: the
+account must have **Bedrock model access for Anthropic Claude Opus 5 enabled in
+us-east-1** (Bedrock console → Model access). Without it, the first turn fails with an
+AccessDenied from Bedrock even though IAM is correct.
 
 The agent Lambda ships from the **same build as the api Lambda** — same `airhead` package,
 same `airhead.handler.handler`, same zip. `./backend/build-lambda.sh` still builds one
 artifact; M2 adds a second function over it, with its own role, timeout, and log group.
-It exists separately so that the role serving CRUD never holds the Anthropic key, and so
+It exists separately so that the role serving CRUD can never invoke the model, and so
 that a 25-second model turn and a 15-second timeout on a DynamoDB query can coexist.
 
 Tuning lives in `variables.tf` under the M2 divider — `agent_effort` (`low`/`medium`/`high`)
@@ -145,8 +135,9 @@ three simultaneous turns in a three-person household something is wrong.
   so this uses `data "aws_route53_zone"`. Keep it that way, including in any future module.
 - **No Lambda gets a VPC attachment.** Nothing here needs to be inside a VPC, and VPC
   endpoints are an expensive way to find that out.
-- **Secrets live in SSM Parameter Store as SecureString** — OAuth refresh tokens, model API
-  keys, CalDAV app passwords. Never in the repo, never in `.tfvars`.
+- **Secrets live in SSM Parameter Store as SecureString** — OAuth refresh tokens, CalDAV
+  app passwords. Never in the repo, never in `.tfvars`. (The model needs no secret at
+  all — Bedrock access is IAM.)
 - **`deploy.sh` uses `npm ci`, not `npm install`.** A stale `node_modules` beside an updated
   `package.json` fails at build time with an unresolvable-import error that looks like broken
   source.

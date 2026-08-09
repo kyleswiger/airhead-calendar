@@ -5,8 +5,14 @@ built against each other. Extends `M1-CONTRACT.md`; everything there still holds
 
 ## The model
 
-`claude-opus-5` via the official `anthropic` SDK, using the beta tool runner
-(`client.beta.messages.tool_runner`) rather than a hand-rolled loop.
+Claude Opus 5 on **AWS Bedrock** — model id `us.anthropic.claude-opus-5` (the
+cross-region inference profile; the bare foundation-model id is not directly
+invokable in us-east-1) — via the official `anthropic` SDK's `AnthropicBedrockMantle`
+client, using the beta tool runner (`client.beta.messages.tool_runner`) rather than a
+hand-rolled loop. Auth is the Lambda role's SigV4 credentials against
+`bedrock:InvokeModel*` (no API key, no SSM, no KMS), and token spend lands on the AWS
+bill. The account must have Bedrock model access for Anthropic Claude Opus 5 enabled
+in us-east-1.
 
 Four things about Opus 5 that are easy to get wrong, and all four are 400s or silent
 cost bugs rather than obvious failures:

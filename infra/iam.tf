@@ -1,5 +1,5 @@
 # One role per Lambda, never a shared one. PRD §13 requires that the `sync` role
-# cannot read the Anthropic key and the `agent` role cannot read OAuth tokens, and
+# cannot invoke the model and the `agent` role cannot read OAuth tokens, and
 # that separation only exists if the roles are separate from the start - retrofitting
 # it means re-deriving which of a shared role's permissions each function actually
 # used, from logs, after the fact.
@@ -96,16 +96,17 @@ resource "aws_iam_role_policy" "api_dynamodb" {
   policy = data.aws_iam_policy_document.api_dynamodb.json
 }
 
-# The api role has no ssm:GetParameter and no kms:Decrypt. It needs neither: the
-# Anthropic key belongs to the agent role and OAuth refresh tokens belong to the
-# sync role. Grant secrets on the role that uses them, never here for convenience.
+# The api role has no bedrock:InvokeModel, no ssm:GetParameter, and no kms:Decrypt.
+# It needs none of them: model access belongs to the agent role and OAuth refresh
+# tokens belong to the sync role. Grant those on the role that uses them, never here
+# for convenience.
 
 # --- M2: agent ---------------------------------------------------------------
 
 # The second role, built by copying the block above rather than widening it - which
 # is what the note at the top of this file promised and the only reason PRD §13's
-# split is real. Concretely: the api role still cannot read the Anthropic key, and
-# when M3 adds `sync`, that role will not be able to either.
+# split is real. Concretely: the api role still cannot invoke the model, and when
+# M3 adds `sync`, that role will not be able to either.
 resource "aws_iam_role" "agent" {
   name               = "${var.project}-agent"
   description        = "Execution role for the ${var.project} agent Lambda (Anthropic tool loop)."
@@ -122,47 +123,33 @@ data "aws_iam_policy_document" "agent_logs" {
   }
 }
 
-# THE STATEMENT THIS WHOLE FILE EXISTS FOR. Read the Resource before you edit it.
+# Model access is IAM, not a key. The agent invokes Claude through Bedrock's Mantle
+# endpoint with the role's own SigV4 credentials - there is no Anthropic API key, no
+# SSM parameter holding one, and no KMS key protecting it. What remains of PRD §13's
+# role separation is this grant: only the agent role may invoke the model, scoped to
+# exactly one model.
 #
-# It is a single parameter ARN. Not `ssm:*`, not `Resource = "*"`, and - the one that
-# looks harmless and is not - not `arn:aws:ssm:*:*:parameter/airhead/*`. A wildcard on
-# the project path reads as "this stack's own secrets" and is fine on the day it is
-# written, because the Anthropic key is the only parameter under it. M3 stores Google
-# OAuth refresh tokens under the same prefix, and on that day the path grant silently
-# becomes "the agent may read the household's calendar credentials" - with no diff on
-# this file, no failing test, and nothing in a plan to notice. PRD §13 asks for exactly
-# the opposite. Naming the parameter outright means a future secret is a deliberate
-# edit here, not an accident of prefix matching.
-#
-# GetParameter, singular: boto3's get_parameter() calls it, and GetParametersByPath is
-# a listing API - the one call that would enumerate the sync role's parameters.
-data "aws_iam_policy_document" "agent_secrets" {
+# anthropic.claude-opus-5 is INFERENCE_PROFILE-only in us-east-1 (direct
+# foundation-model invoke is rejected), so the code sends the `us.` cross-region
+# profile id and the grant must cover BOTH the profile ARN (what the request names)
+# and the regional foundation-model ARNs it fans out to (what Bedrock invokes on the
+# caller's behalf). Dropping either half fails at the first turn with an AccessDenied
+# naming whichever ARN is missing.
+data "aws_iam_policy_document" "agent_bedrock" {
   statement {
-    sid       = "ReadAnthropicKey"
-    effect    = "Allow"
-    actions   = ["ssm:GetParameter"]
-    resources = [aws_ssm_parameter.anthropic_api_key.arn]
-  }
-
-  # SSM decrypts a SecureString with the caller's own KMS permissions, so without this
-  # GetParameter(WithDecryption=True) fails with AccessDenied naming KMS, not SSM.
-  #
-  # The encryption context condition is the belt to the key ARN's braces. SSM passes
-  # `PARAMETER_ARN = <the parameter's arn>` on every SecureString decrypt, so pinning
-  # it means this grant covers this parameter and nothing else - including the future
-  # parameters that will share this key. If the M3 tokens land on the same CMK, the
-  # agent still cannot decrypt them, because the context will not match.
-  statement {
-    sid       = "DecryptAnthropicKey"
-    effect    = "Allow"
-    actions   = ["kms:Decrypt"]
-    resources = [aws_kms_key.secrets.arn]
-
-    condition {
-      test     = "StringEquals"
-      variable = "kms:EncryptionContext:PARAMETER_ARN"
-      values   = [aws_ssm_parameter.anthropic_api_key.arn]
-    }
+    sid    = "InvokeClaudeOpus5"
+    effect = "Allow"
+    actions = [
+      "bedrock:InvokeModel",
+      "bedrock:InvokeModelWithResponseStream",
+    ]
+    resources = [
+      "arn:aws:bedrock:${var.region}:${data.aws_caller_identity.current.account_id}:inference-profile/us.anthropic.claude-opus-5",
+      # The profile's member models - us-east-1, us-east-2, us-west-2 today. A region
+      # wildcard on this one model id, rather than three pinned regions, so Bedrock
+      # adding a member region is not a mid-conversation AccessDenied.
+      "arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-5",
+    ]
   }
 }
 
@@ -216,14 +203,14 @@ resource "aws_iam_role_policy" "agent_dynamodb" {
   policy = data.aws_iam_policy_document.agent_dynamodb.json
 }
 
-resource "aws_iam_role_policy" "agent_secrets" {
-  name   = "secrets"
+resource "aws_iam_role_policy" "agent_bedrock" {
+  name   = "bedrock"
   role   = aws_iam_role.agent.id
-  policy = data.aws_iam_policy_document.agent_secrets.json
+  policy = data.aws_iam_policy_document.agent_bedrock.json
 }
 
-# The agent role has no route to an OAuth refresh token: no ssm:GetParameter beyond
-# the one ARN above, no ssm:GetParametersByPath to discover others, and a kms:Decrypt
-# that only unlocks one encryption context. That is the half of PRD §13 M2 can prove.
-# The other half - the sync role not reaching the Anthropic key - is M3's to keep, and
-# it stays true as long as its policy names its own parameters the same way.
+# The agent role has no route to an OAuth refresh token: no ssm:GetParameter at all,
+# no kms:Decrypt, and its only unusual grant is bedrock:InvokeModel* on one model.
+# That is the half of PRD §13 M2 can prove. The other half - the sync role not being
+# able to invoke the model - is M3's to keep, and it stays true as long as its policy
+# names its own parameters and nothing under bedrock:*.

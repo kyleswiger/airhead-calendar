@@ -45,19 +45,5 @@ output "agent_function_name" {
   value       = aws_lambda_function.agent.function_name
 }
 
-# The name, not the value. There is no output for the key itself and there must not
-# be: an output is stored in state and printed by `terraform output` with no redaction
-# unless marked sensitive, and `sensitive` only hides it from the console.
-output "anthropic_api_key_parameter_name" {
-  description = "SSM parameter the agent reads its API key from. Terraform creates it with a placeholder; populate it with `aws ssm put-parameter` - see secrets.tf."
-  value       = aws_ssm_parameter.anthropic_api_key.name
-}
-
-# Needed by the put-parameter call that populates the parameter above: `--overwrite`
-# without an explicit `--key-id` is the documented way to end up with a value sitting
-# under a different key than the one the agent's kms:Decrypt grant names, which fails
-# at the first turn with an AccessDenied that points at KMS rather than at the typo.
-output "secrets_kms_key_id" {
-  description = "CMK encrypting the SecureString parameters. Pass to `aws ssm put-parameter --key-id`."
-  value       = aws_kms_key.secrets.key_id
-}
+# No key-related outputs. The agent authenticates to Bedrock with its role's SigV4
+# credentials; there is no Anthropic API key, no SSM parameter, and no KMS key to name.

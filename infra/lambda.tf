@@ -170,8 +170,9 @@ resource "aws_lambda_function" "agent" {
   }
 
   # NO VPC CONFIGURATION. The reasoning on the api function above applies unchanged,
-  # and one thing more: this function's only outbound dependency is api.anthropic.com,
-  # a public endpoint with no VPC endpoint to buy. In a VPC it would need a NAT gateway
+  # and one thing more: this function's only outbound dependency is Bedrock's Mantle
+  # endpoint (bedrock-mantle.us-east-1.api.aws), a public SigV4 endpoint. In a VPC it
+  # would need a NAT gateway
   # - not an interface endpoint - which is the most expensive way this stack could
   # possibly reach the internet, on a $7-13/month budget (PRD §16).
 
@@ -184,26 +185,11 @@ resource "aws_lambda_function" "agent" {
       AIRHEAD_LOG_LEVEL    = var.log_level
       AIRHEAD_REPO_BACKEND = "dynamodb"
 
-      # The parameter NAME. Never the key, and never an ANTHROPIC_API_KEY variable
-      # holding one: Lambda environment variables are plaintext to anyone with
-      # lambda:GetFunctionConfiguration, they are rendered in the console, and the
-      # only way Terraform could set one is by reading the SecureString through a
-      # data source - which writes the decrypted key into remote state, undoing the
-      # entire arrangement in secrets.tf. The function resolves this name through SSM
-      # at runtime with the role's own scoped grant (iam.tf) and caches the client for
-      # the container's life.
-      #
-      # MISMATCH TO RECONCILE, and it is a runtime failure rather than a build one:
-      # airhead.api.deps._anthropic_client() currently does
-      # `os.environ.get("ANTHROPIC_API_KEY")` and raises if it is empty. Nothing sets
-      # that variable here and nothing should. The seam is already in the right place -
-      # one lru_cached constructor - so the fix is inside it: read this parameter name,
-      # call ssm.get_parameter(Name=..., WithDecryption=True), and pass the result as
-      # an explicit api_key=. Because the key will not arrive through the SDK's default
-      # ANTHROPIC_API_KEY lookup, a client constructed with no argument fails at the
-      # first request rather than at import, which is a slow way to find this out.
-      # Keeping the env-var read as a local-development fallback is fine.
-      AIRHEAD_ANTHROPIC_KEY_PARAM = aws_ssm_parameter.anthropic_api_key.name
+      # No API key variable, and no SSM parameter name either: the function invokes
+      # Claude through Bedrock's Mantle endpoint, SigV4-signed with this role's own
+      # credentials, and Lambda injects AWS_REGION on its own. The whole secret
+      # distribution problem this block used to document is gone - auth is the
+      # bedrock:InvokeModel* grant in iam.tf, billing is the AWS bill.
 
       # M2 contract, "The model". Configuration rather than constants because effort
       # is the primary cost/latency lever and the contract explicitly says to sweep

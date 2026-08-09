@@ -83,9 +83,9 @@ variable "api_throttle_burst_limit" {
 
 # --- M2: agent ---------------------------------------------------------------
 #
-# No variable holds the Anthropic key. It is not here, it is not in terraform.tfvars,
-# and there is no `sensitive` input that would put it in state - see secrets.tf for
-# how the operator populates it and why that was the choice.
+# There is no Anthropic key anywhere in this stack. The agent invokes Claude through
+# Bedrock with its Lambda role's own SigV4 credentials - see the bedrock grant in
+# iam.tf - so there is nothing secret to hold, distribute, or rotate.
 
 variable "agent_memory_mb" {
   description = "Memory for the agent Lambda. This function waits on the model far more than it computes, and waiting is billed as GB-seconds - so this is a cold-start dial with a direct cost penalty, not a speed dial."
@@ -131,9 +131,9 @@ variable "agent_reserved_concurrency" {
 }
 
 variable "agent_model" {
-  description = "Anthropic model id for the conversational agent. Pinned, never an alias: a floating id changes cost and behaviour on Anthropic's release schedule rather than on a deploy."
+  description = "Bedrock model id for the conversational agent. Opus 5 is INFERENCE_PROFILE-only in us-east-1, so this is the `us.` cross-region inference profile id, not the bare foundation-model id. Changing it means also changing the ARN pair in iam.tf's agent_bedrock policy."
   type        = string
-  default     = "claude-opus-5"
+  default     = "us.anthropic.claude-opus-5"
 }
 
 variable "agent_effort" {

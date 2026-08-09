@@ -62,8 +62,11 @@ echo "==> pruning the SDK the runtime already provides"
 # boto3/botocore are ~70MB unzipped and are preinstalled in the Lambda Python
 # runtime. Bundling them buys a newer SDK we do not need and pushes the artifact
 # toward the 50MB zipped direct-upload limit, past which this needs an S3 staging
-# bucket. If a future adapter ever needs an SDK feature newer than the runtime's,
-# delete this block and add the S3 upload path - do not do both halfway.
+# bucket. This prune is safe for anthropic[bedrock] too: its SigV4 signing imports
+# botocore.auth.SigV4Auth at runtime and declares botocore>=1.31.57, which the
+# python3.12 runtime's preinstalled botocore exceeds by years. If a future adapter
+# ever needs an SDK feature newer than the runtime's, delete this block and add
+# the S3 upload path - do not do both halfway.
 rm -rf "${BUILD_DIR}"/boto3* "${BUILD_DIR}"/botocore* "${BUILD_DIR}"/s3transfer*
 
 echo "==> copying the airhead package"

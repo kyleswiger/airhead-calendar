@@ -44,7 +44,7 @@ def get_settings() -> Settings:
         backend=os.environ.get("AIRHEAD_REPO_BACKEND", "dynamodb"),
         table_name=os.environ.get("AIRHEAD_TABLE", "airhead"),
         sqlite_path=os.environ.get("AIRHEAD_SQLITE_PATH", ":memory:"),
-        agent_model=os.environ.get("AIRHEAD_AGENT_MODEL", "claude-opus-5"),
+        agent_model=os.environ.get("AIRHEAD_AGENT_MODEL", "us.anthropic.claude-opus-5"),
         agent_effort=os.environ.get("AIRHEAD_AGENT_EFFORT", "medium"),
         agent_max_tokens=int(os.environ.get("AIRHEAD_AGENT_MAX_TOKENS", "16000")),
     )
@@ -107,42 +107,22 @@ def get_turn_repo() -> TurnRepo:
     return _repos()[3]
 
 
-def _anthropic_api_key() -> str:
-    """Resolve the model API key.
-
-    In AWS the Lambda receives `AIRHEAD_ANTHROPIC_KEY_PARAM` — the *name* of an SSM
-    SecureString, not the key. Terraform cannot pass the key itself: reading it there
-    would need a `data "aws_ssm_parameter"`, which writes the decrypted value into
-    remote state in a shared S3 bucket. So the decrypt happens here, at first use.
-
-    Locally there is no SSM and no reason to need AWS credentials, so a plain
-    `ANTHROPIC_API_KEY` is the fallback. Neither value is ever logged or put in an
-    error message.
-    """
-    param = os.environ.get("AIRHEAD_ANTHROPIC_KEY_PARAM", "")
-    if param:
-        import boto3
-
-        response = boto3.client("ssm").get_parameter(Name=param, WithDecryption=True)
-        return str(response["Parameter"]["Value"])
-
-    key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not key:
-        raise RuntimeError("Neither AIRHEAD_ANTHROPIC_KEY_PARAM nor ANTHROPIC_API_KEY is set.")
-    return key
-
-
 @lru_cache(maxsize=1)
 def _anthropic_client() -> Any:
-    """The Anthropic client, built on first use and reused across warm invocations.
+    """The Bedrock (Mantle) client, built on first use and reused across warm invocations.
 
-    Never at import time: pytest would need a key just to import the app, and a cold
-    Lambda that imports the SDK - or calls SSM - before it knows it needs to pays for
-    that on every invocation, including the routes that never touch the model.
+    No API key anywhere: the client SigV4-signs requests with the Lambda role's own
+    credentials, so auth is the IAM policy in infra/iam.tf (bedrock:InvokeModel* on the
+    Claude inference profile) and billing lands on the AWS account. Locally, the same
+    default credential chain applies - any profile with Bedrock access works.
+
+    Never at import time: pytest would need AWS credentials just to import the app, and
+    a cold Lambda that imports the SDK before it knows it needs to pays for that on
+    every invocation, including the routes that never touch the model.
     """
-    from anthropic import Anthropic
+    from anthropic import AnthropicBedrockMantle
 
-    return Anthropic(api_key=_anthropic_api_key())
+    return AnthropicBedrockMantle(aws_region=os.environ.get("AWS_REGION", "us-east-1"))
 
 
 def get_runner() -> Any:
