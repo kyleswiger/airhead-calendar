@@ -1,0 +1,223 @@
+# Continuous deploy: push to main ships code, and only code.
+#
+# Infrastructure is Terraform's alone - this workflow never runs terraform and
+# its IAM role (infra/github-actions.tf) cannot change configuration, only
+# swap Lambda code bytes and site objects. Infra changes remain a manual
+# `terraform apply` in infra/, exactly as before.
+#
+# No real deployment values are committed (public, genericized repo): the
+# bucket, distribution id, and API endpoint are resolved at run time from the
+# live account with read-only calls the role explicitly grants.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  # Manual re-run entry point: redeploys everything regardless of what the
+  # last push touched (paths-filter treats dispatch as "all changed").
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # required to mint the OIDC token for configure-aws-credentials
+
+# One deploy at a time, in order. cancel-in-progress stays false: killing an
+# s3 sync or a half-applied pair of Lambda updates mid-flight is worse than
+# waiting for it to finish.
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          # workflow_dispatch bypasses these outputs entirely - each deploy
+          # job's `if` also fires on dispatch, so a manual run ships both.
+          filters: |
+            backend:
+              - 'backend/src/**'
+              - 'backend/pyproject.toml'
+              - 'backend/build-lambda.sh'
+            frontend:
+              - 'frontend/src/**'
+              - 'frontend/index.html'
+              - 'frontend/package.json'
+              - 'frontend/package-lock.json'
+              - 'frontend/vite.config.ts'
+              - 'frontend/tsconfig.json'
+
+  backend:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # The build machine's interpreter only drives pip; the wheels are
+          # selected by --python-version 3.12 inside build-lambda.sh to match
+          # the Lambda runtime.
+          python-version: "3.12"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Build Lambda package
+        run: ./backend/build-lambda.sh
+
+      - name: Zip
+        # Terraform zips this directory itself via archive_file; out-of-band
+        # code deploys have to produce the same shape by hand. Info-ZIP and
+        # Terraform's Go zip writer do NOT produce identical bytes for the
+        # same tree, so a CI deploy always leaves CodeSha256 differing from
+        # archive_file's hash — which is why infra/lambda.tf ignores
+        # filename/source_code_hash changes on both functions: CI owns code
+        # deploys, terraform owns everything else.
+        run: cd backend/build/api && zip -qr ../api.zip .
+
+      - name: Update api function
+        run: |
+          aws lambda update-function-code \
+            --function-name airhead-api \
+            --zip-file fileb://backend/build/api.zip \
+            --query '{Function: FunctionName, Sha256: CodeSha256}' --output table
+          aws lambda wait function-updated-v2 --function-name airhead-api
+
+      - name: Update agent function
+        # Both functions deliberately share one artifact (infra/lambda.tf).
+        # The agent function is M2 infra that may not be applied yet - the
+        # merged-but-never-applied PR #3 - so its absence is a loud warning,
+        # not a failed deploy. The first `terraform apply` in infra/ creates
+        # it, and every deploy after that updates it.
+        run: |
+          set +e
+          err="$(aws lambda get-function --function-name airhead-agent \
+                   --query Configuration.FunctionName --output text 2>&1 >/dev/null)"
+          rc=$?
+          set -e
+          if [[ $rc -eq 0 ]]; then
+            aws lambda update-function-code \
+              --function-name airhead-agent \
+              --zip-file fileb://backend/build/api.zip \
+              --query '{Function: FunctionName, Sha256: CodeSha256}' --output table
+            aws lambda wait function-updated-v2 --function-name airhead-agent
+          elif grep -q "ResourceNotFoundException" <<<"$err"; then
+            # Only a genuine not-found is skippable. Throttling, AccessDenied,
+            # or a broken OIDC session must fail the deploy — otherwise the
+            # agent silently stays on stale code while the run reports green.
+            echo "::warning::airhead-agent does not exist yet (M2 infra not applied)." \
+                 "Skipping - run 'terraform apply' in infra/ to create it;" \
+                 "the next deploy will pick it up."
+          else
+            echo "::error::could not determine whether airhead-agent exists: ${err}"
+            exit 1
+          fi
+
+  frontend:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve deployment targets
+        # deploy.sh reads these from terraform output; CI has no state access
+        # (and should not - state holds more than CI needs), so resolve the
+        # same values from the live account with the role's read-only grants.
+        id: targets
+        run: |
+          set -euo pipefail
+
+          api_base="$(aws apigatewayv2 get-apis \
+            --query "Items[?Name=='airhead-api'].ApiEndpoint | [0]" --output text)"
+          if [[ -z "$api_base" || "$api_base" == "None" ]]; then
+            echo "::error::HTTP API 'airhead-api' not found - has 'terraform apply' run?"
+            exit 1
+          fi
+
+          account="$(aws sts get-caller-identity --query Account --output text)"
+          bucket="airhead-site-${account}"
+
+          # The comment is set in infra/site.tf and is this stack's stable,
+          # committable handle on the distribution.
+          dist_id="$(aws cloudfront list-distributions \
+            --query "DistributionList.Items[?Comment=='airhead kitchen display + PWA'].Id | [0]" \
+            --output text)"
+          if [[ -z "$dist_id" || "$dist_id" == "None" ]]; then
+            echo "::error::CloudFront distribution not found by comment - has 'terraform apply' run?"
+            exit 1
+          fi
+
+          {
+            echo "api_base=${api_base}"
+            echo "bucket=${bucket}"
+            echo "dist_id=${dist_id}"
+          } >> "$GITHUB_OUTPUT"
+          echo "api=${api_base} bucket=${bucket} distribution=${dist_id}"
+
+      - name: Build
+        # Vite inlines VITE_* at build time; an unset VITE_API_BASE does not
+        # fail the build, it silently ships the bundled sample fixture. The
+        # resolve step above hard-fails first, so that cannot happen here.
+        #
+        # The AWS deploy credentials are blanked for this step: npm ci runs
+        # every dependency's install scripts and npm run build executes Vite
+        # plugin code from node_modules, so a compromised transitive package
+        # here must not be able to read credentials that can write to the
+        # production Lambda/S3. The sync/invalidate steps below still see the
+        # job-level credentials untouched.
+        env:
+          VITE_API_BASE: ${{ steps.targets.outputs.api_base }}
+          AWS_ACCESS_KEY_ID: ""
+          AWS_SECRET_ACCESS_KEY: ""
+          AWS_SESSION_TOKEN: ""
+          AWS_DEFAULT_REGION: ""
+        run: cd frontend && npm ci && npm run build
+
+      - name: Sync to S3
+        # Mirrors deploy.sh: hashed assets cache immutably, index.html never
+        # does - or the kitchen display keeps serving a stale bundle.
+        env:
+          BUCKET: ${{ steps.targets.outputs.bucket }}
+        run: |
+          set -euo pipefail
+          aws s3 sync frontend/dist "s3://${BUCKET}" \
+            --delete \
+            --exclude "index.html" \
+            --cache-control "public,max-age=31536000,immutable"
+          aws s3 cp frontend/dist/index.html "s3://${BUCKET}/index.html" \
+            --cache-control "no-cache,must-revalidate"
+
+      - name: Invalidate CloudFront
+        env:
+          DIST_ID: ${{ steps.targets.outputs.dist_id }}
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "${DIST_ID}" \
+            --paths "/index.html" "/" \
+            --query 'Invalidation.Id' --output text

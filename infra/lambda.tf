@@ -53,6 +53,15 @@ resource "aws_lambda_function" "api" {
   # and nothing changed" afternoon.
   source_code_hash = data.archive_file.api.output_base64sha256
 
+  # CI (deploy.yml) pushes code out-of-band with update-function-code, and its
+  # Info-ZIP artifact never hashes identically to archive_file's Go-written zip.
+  # Without this, every post-CI plan proposes "reverting" the Lambda to whatever
+  # stale zip sits in the local build directory. CI owns code; Terraform owns
+  # configuration. Remove this only if deploys move back into Terraform.
+  lifecycle {
+    ignore_changes = [filename, source_code_hash]
+  }
+
   # NO VPC CONFIGURATION, AND DO NOT ADD ONE. PRD §16 is explicit: nothing in this
   # stack needs to be inside a VPC. DynamoDB, CloudWatch, and SSM are all reached
   # over their public endpoints with SigV4 and IAM, which is exactly as authenticated
@@ -150,6 +159,15 @@ resource "aws_lambda_function" "agent" {
 
   filename         = data.archive_file.api.output_path
   source_code_hash = data.archive_file.api.output_base64sha256
+
+  # CI (deploy.yml) pushes code out-of-band with update-function-code, and its
+  # Info-ZIP artifact never hashes identically to archive_file's Go-written zip.
+  # Without this, every post-CI plan proposes "reverting" the Lambda to whatever
+  # stale zip sits in the local build directory. CI owns code; Terraform owns
+  # configuration. Remove this only if deploys move back into Terraform.
+  lifecycle {
+    ignore_changes = [filename, source_code_hash]
+  }
 
   # NO VPC CONFIGURATION. The reasoning on the api function above applies unchanged,
   # and one thing more: this function's only outbound dependency is api.anthropic.com,
