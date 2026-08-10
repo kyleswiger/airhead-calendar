@@ -5,10 +5,9 @@ persist it, and reports what actually happened to the calendar. The interesting
 behaviour is deliberately *not* here — visibility, authorization and the
 confirmation gate all live in `tools.py`, where the model cannot reach them.
 
-Opus 5 specifics that are 400s or silent truncation rather than warnings:
-thinking is on by default and `max_tokens` caps thinking plus response text, so
-16k is a floor not a ceiling; `budget_tokens` is gone; and `temperature`,
-`top_p` and `top_k` are rejected outright. Depth is `output_config.effort`.
+Sonnet 4.6 specifics worth remembering: `max_tokens` caps thinking plus
+response text when thinking is on, so 16k is a floor not a ceiling;
+`budget_tokens` is deprecated; and depth is `output_config.effort`.
 """
 
 from __future__ import annotations
@@ -82,11 +81,11 @@ class TurnResult:
 class AgentDeps:
     events: EventRepo
     members: MemberRepo
-    # An Anthropic client (AnthropicBedrockMantle in prod); injected so tests can fake it.
+    # An Anthropic client (legacy AnthropicBedrock in prod); injected so tests can fake it.
     client: Any
-    model: str = "us.anthropic.claude-opus-5"
+    model: str = "us.anthropic.claude-sonnet-4-6"
     effort: str = "medium"
-    # Caps thinking *plus* visible text on Opus 5. Sized for the thinking, not
+    # Caps thinking *plus* visible text with thinking enabled. Sized for the thinking, not
     # for the two sentences the kitchen screen shows.
     max_tokens: int = 16000
 
@@ -123,7 +122,8 @@ def run_turn(request: TurnRequest, *, deps: AgentDeps) -> TurnResult:
         },
     ]
 
-    runner = deps.client.beta.messages.tool_runner(
+    runner = _tool_runner(
+        deps.client,
         model=deps.model,
         max_tokens=deps.max_tokens,
         # Roster only — no clock, no actor. Everything volatile is in the user
@@ -173,6 +173,30 @@ def run_turn(request: TurnRequest, *, deps: AgentDeps) -> TurnResult:
         },
     )
     return result
+
+
+def _tool_runner(client: Any, **kwargs: Any) -> Any:
+    """The SDK's beta tool runner, on whatever client we were handed.
+
+    The first-party and Mantle clients expose `beta.messages.tool_runner`
+    directly. The legacy `AnthropicBedrock` client (the bedrock-runtime
+    InvokeModel path — the one that actually works on this AWS account) does
+    not, but its beta messages resource already borrows the first-party
+    `create`, which is all the runner calls — so borrow the first-party
+    `tool_runner` the same way and bind it to the Bedrock resource. Test fakes
+    define `tool_runner` themselves and take the first branch.
+    """
+    messages = client.beta.messages
+    if hasattr(messages, "tool_runner"):
+        return messages.tool_runner(**kwargs)
+    from anthropic.resources.beta.messages.messages import Messages as _FirstPartyBetaMessages
+
+    # The runner's request path is `beta.messages.parse`, which — like the
+    # borrowed `create` — posts to /v1/messages and rides the Bedrock client's
+    # URL mapping to /model/{id}/invoke. Bind it once on the cached resource.
+    if not hasattr(messages, "parse"):
+        messages.parse = _FirstPartyBetaMessages.parse.__get__(messages)
+    return _FirstPartyBetaMessages.tool_runner(messages, **kwargs)
 
 
 def _confirmation_note(confirm: Confirmation | None, settled: ToolOutcome | None) -> str | None:

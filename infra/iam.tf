@@ -123,32 +123,33 @@ data "aws_iam_policy_document" "agent_logs" {
   }
 }
 
-# Model access is IAM, not a key. The agent invokes Claude through Bedrock's Mantle
-# endpoint with the role's own SigV4 credentials - there is no Anthropic API key, no
-# SSM parameter holding one, and no KMS key protecting it. What remains of PRD §13's
-# role separation is this grant: only the agent role may invoke the model, scoped to
-# exactly one model.
+# Model access is IAM, not a key. The agent invokes Claude through the legacy
+# bedrock-runtime InvokeModel path with the role's own SigV4 credentials - there is
+# no Anthropic API key, no SSM parameter holding one, and no KMS key protecting it.
+# (Not the Mantle endpoint: this account is not onboarded to bedrock-mantle, and
+# Opus 5 / Opus 4.8 / Sonnet 5 are additionally sales-gated on this account.) What
+# remains of PRD §13's role separation is this grant: only the agent role may invoke
+# the model, scoped to exactly one model.
 #
-# anthropic.claude-opus-5 is INFERENCE_PROFILE-only in us-east-1 (direct
-# foundation-model invoke is rejected), so the code sends the `us.` cross-region
-# profile id and the grant must cover BOTH the profile ARN (what the request names)
-# and the regional foundation-model ARNs it fans out to (what Bedrock invokes on the
-# caller's behalf). Dropping either half fails at the first turn with an AccessDenied
-# naming whichever ARN is missing.
+# The code sends the `us.` cross-region inference-profile id, so the grant must
+# cover BOTH the profile ARN (what the request names) and the regional
+# foundation-model ARNs it fans out to (us-east-1, us-east-2, us-west-2 today -
+# what Bedrock invokes on the caller's behalf). Dropping either half fails at the
+# first turn with an AccessDenied naming whichever ARN is missing.
 data "aws_iam_policy_document" "agent_bedrock" {
   statement {
-    sid    = "InvokeClaudeOpus5"
+    sid    = "InvokeClaudeSonnet"
     effect = "Allow"
     actions = [
       "bedrock:InvokeModel",
       "bedrock:InvokeModelWithResponseStream",
     ]
     resources = [
-      "arn:aws:bedrock:${var.region}:${data.aws_caller_identity.current.account_id}:inference-profile/us.anthropic.claude-opus-5",
-      # The profile's member models - us-east-1, us-east-2, us-west-2 today. A region
-      # wildcard on this one model id, rather than three pinned regions, so Bedrock
-      # adding a member region is not a mid-conversation AccessDenied.
-      "arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-5",
+      "arn:aws:bedrock:${var.region}:${data.aws_caller_identity.current.account_id}:inference-profile/us.anthropic.claude-sonnet-4-6",
+      # The profile's member models. A region wildcard on this one model id, rather
+      # than three pinned regions, so Bedrock adding a member region is not a
+      # mid-conversation AccessDenied.
+      "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-6",
     ]
   }
 }

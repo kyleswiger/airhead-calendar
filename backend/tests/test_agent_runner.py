@@ -200,7 +200,7 @@ def test_a_turn_that_creates_an_event() -> None:
     assert repo.get(HOUSEHOLD, result.actions[0].event_id).title == "Soccer practice"
     # user -> assistant(tool_use) -> user(tool_result) -> assistant(text)
     assert [m["role"] for m in result.history] == ["user", "assistant", "user", "assistant"]
-    assert client.requests[0]["model"] == "us.anthropic.claude-opus-5"
+    assert client.requests[0]["model"] == "us.anthropic.claude-sonnet-4-6"
     assert client.requests[0]["output_config"] == {"effort": "medium"}
 
 
