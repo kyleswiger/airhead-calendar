@@ -5,28 +5,32 @@ built against each other. Extends `M1-CONTRACT.md`; everything there still holds
 
 ## The model
 
-Claude Opus 5 on **AWS Bedrock** — model id `us.anthropic.claude-opus-5` (the
-cross-region inference profile; the bare foundation-model id is not directly
-invokable in us-east-1) — via the official `anthropic` SDK's `AnthropicBedrockMantle`
-client, using the beta tool runner (`client.beta.messages.tool_runner`) rather than a
-hand-rolled loop. Auth is the Lambda role's SigV4 credentials against
-`bedrock:InvokeModel*` (no API key, no SSM, no KMS), and token spend lands on the AWS
-bill. The account must have Bedrock model access for Anthropic Claude Opus 5 enabled
-in us-east-1.
+Claude Sonnet 4.6 on **AWS Bedrock** — model id `us.anthropic.claude-sonnet-4-6` (the
+cross-region inference profile) — via the official `anthropic` SDK's legacy
+`AnthropicBedrock` client (the bedrock-runtime **InvokeModel** path), using the beta
+tool runner borrowed from the first-party client (see `_tool_runner` in
+`airhead/agent/runner.py`) rather than a hand-rolled loop. Auth is the Lambda role's
+SigV4 credentials against `bedrock:InvokeModel*` (no API key, no SSM, no KMS), and
+token spend lands on the AWS bill.
 
-Four things about Opus 5 that are easy to get wrong, and all four are 400s or silent
-cost bugs rather than obvious failures:
+Why not `AnthropicBedrockMantle` and Opus 5, which this contract originally named:
+this AWS account is **not onboarded to the bedrock-mantle endpoint** (every model
+403s there, "not available for this account"), and Opus 5 / Opus 4.8 / Sonnet 5 are
+additionally access-gated on this account even on the legacy path — unlocking them
+requires contacting AWS Sales. Sonnet 4.6 is the strongest model the account can
+invoke today. The model stays env-configurable (`AIRHEAD_AGENT_MODEL` /
+`var.agent_model`, plus the ARN pair in iam.tf) for a future upgrade once access is
+granted.
 
-- **`thinking` is on by default.** Omitting the parameter runs adaptive thinking;
-  `{"type": "adaptive"}` is the same thing. This is the opposite of Opus 4.8.
-- **`max_tokens` caps thinking *plus* response text.** Sizing it around the visible
-  answer truncates the answer mid-sentence once thinking is counted.
-- **`budget_tokens` is removed** — it returns a 400. Depth is `output_config.effort`.
-- **`temperature`, `top_p`, and `top_k` are rejected.** Steer with the prompt.
+Things about Sonnet 4.6 that are easy to get wrong:
 
-`output_config={"effort": "medium"}` for the conversational agent. Sweep low/medium/high
-against real transcripts before locking it in — Opus 5 is unusually strong at the low end,
-and that is the primary cost and latency lever.
+- **`max_tokens` caps thinking *plus* response text** when thinking is enabled.
+  Sizing it around the visible answer truncates the answer mid-sentence.
+- **`budget_tokens` is deprecated.** Depth is `output_config.effort`.
+
+`output_config={"effort": "medium"}` for the conversational agent. Sweep
+low/medium/high against real transcripts before locking it in — that is the primary
+cost and latency lever.
 
 ## Prompt caching
 

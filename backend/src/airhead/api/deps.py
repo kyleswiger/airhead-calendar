@@ -30,7 +30,7 @@ class Settings:
     table_name: str
     sqlite_path: str
     agent_model: str
-    # Depth, not length: Opus 5 removed `budget_tokens` and takes `output_config.effort`.
+    # Depth, not length: Sonnet 4.6 deprecates `budget_tokens` in favor of `output_config.effort`.
     agent_effort: str
     # Caps thinking *plus* response text, so it is sized well above the visible answer.
     agent_max_tokens: int
@@ -44,7 +44,7 @@ def get_settings() -> Settings:
         backend=os.environ.get("AIRHEAD_REPO_BACKEND", "dynamodb"),
         table_name=os.environ.get("AIRHEAD_TABLE", "airhead"),
         sqlite_path=os.environ.get("AIRHEAD_SQLITE_PATH", ":memory:"),
-        agent_model=os.environ.get("AIRHEAD_AGENT_MODEL", "us.anthropic.claude-opus-5"),
+        agent_model=os.environ.get("AIRHEAD_AGENT_MODEL", "us.anthropic.claude-sonnet-4-6"),
         agent_effort=os.environ.get("AIRHEAD_AGENT_EFFORT", "medium"),
         agent_max_tokens=int(os.environ.get("AIRHEAD_AGENT_MAX_TOKENS", "16000")),
     )
@@ -109,7 +109,13 @@ def get_turn_repo() -> TurnRepo:
 
 @lru_cache(maxsize=1)
 def _anthropic_client() -> Any:
-    """The Bedrock (Mantle) client, built on first use and reused across warm invocations.
+    """The Bedrock client (legacy InvokeModel path), built on first use and reused
+    across warm invocations.
+
+    Legacy `AnthropicBedrock` rather than `AnthropicBedrockMantle` on purpose: this
+    AWS account is not onboarded to the bedrock-mantle endpoint (every model 403s
+    there), while the bedrock-runtime InvokeModel path works today with the
+    `us.anthropic.claude-sonnet-4-6` inference profile.
 
     No API key anywhere: the client SigV4-signs requests with the Lambda role's own
     credentials, so auth is the IAM policy in infra/iam.tf (bedrock:InvokeModel* on the
@@ -120,9 +126,9 @@ def _anthropic_client() -> Any:
     a cold Lambda that imports the SDK before it knows it needs to pays for that on
     every invocation, including the routes that never touch the model.
     """
-    from anthropic import AnthropicBedrockMantle
+    from anthropic import AnthropicBedrock
 
-    return AnthropicBedrockMantle(aws_region=os.environ.get("AWS_REGION", "us-east-1"))
+    return AnthropicBedrock(aws_region=os.environ.get("AWS_REGION", "us-east-1"))
 
 
 def get_runner() -> Any:
