@@ -1,0 +1,38 @@
+# Keeps this repo's pins to the shared tooling current. Pins are exact
+# (`?ref=v1.0.0`), so an upgrade cannot arrive silently — it arrives as a PR,
+# runs CI, and gets reviewed like any other change. Matches kswiger-dev,
+# sportscard-intelligence, and jackscabin-mgmt.
+version: 2
+updates:
+  # Covers `uses:` in .github/workflows. `/` is correct: the ecosystem always
+  # looks under .github/workflows, not the directory given.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # CLAUDE.md requires conventional commits; Dependabot's default subject
+    # ("Bump x from a to b") is not one.
+    commit-message:
+      prefix: chore
+    # One PR per week rather than one per action — these move together, and
+    # each PR costs a full CI run plus two agentic reviews.
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # infra/ holds the only remote module source (github-oidc-role).
+  - package-ecosystem: terraform
+    directory: /infra
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore
+    groups:
+      terraform-modules:
+        patterns: ["*"]
+    ignore:
+      # A provider major is a migration, not a bump — Dependabot rewrites the
+      # lockfile without touching the version constraint, and `terraform init`
+      # then fails outright. Patch and minor still flow.
+      - dependency-name: hashicorp/aws
+        update-types: ["version-update:semver-major"]

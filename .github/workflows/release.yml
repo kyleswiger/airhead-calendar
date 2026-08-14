@@ -1,0 +1,24 @@
+# Semver releases, matching aws-deployment-tooling, aws-reusable-workflows, and
+# cabin-management: conventional commits on main -> release-please opens a
+# release PR -> merging it tags vX.Y.Z, cuts a GitHub Release, and updates
+# CHANGELOG.md.
+#
+# This repo deploys from main rather than from a tag, so a release here is a
+# changelog and a name for what shipped, not a deploy trigger.
+name: release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          release-type: simple
