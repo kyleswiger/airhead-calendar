@@ -6,11 +6,11 @@
 #   terraform output -raw github_actions_role_arn \
 #     | gh secret set AWS_GITHUB_ACTIONS_ROLE_ARN -R kyleswiger/airhead-calendar
 #
-# The module lives in the shared tooling repo. ref=main because the tooling
-# repo publishes no tags yet; when it does, pin one so a push there cannot
-# change this stack's IAM without a deliberate ref bump here.
+# The module lives in the shared tooling repo, pinned to a release tag: a push
+# there cannot change this stack's IAM without a deliberate bump here, which
+# Dependabot raises as a PR.
 module "github_actions" {
-  source = "git::https://github.com/kyleswiger/aws-deployment-tooling.git//terraform-modules/github-oidc-role?ref=main"
+  source = "git::https://github.com/kyleswiger/aws-deployment-tooling.git//terraform-modules/github-oidc-role?ref=v1.0.0"
 
   name_prefix = var.project
   github_repo = "kyleswiger/airhead-calendar"
