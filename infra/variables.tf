@@ -131,13 +131,13 @@ variable "agent_reserved_concurrency" {
 }
 
 variable "agent_model" {
-  description = "Bedrock model id for the conversational agent. Opus 5 is INFERENCE_PROFILE-only in us-east-1, so this is the `us.` cross-region inference profile id, not the bare foundation-model id. Changing it means also changing the ARN pair in iam.tf's agent_bedrock policy."
+  description = "Bedrock model id for the conversational agent, invoked through the legacy bedrock-runtime InvokeModel path (this account is not onboarded to bedrock-mantle, and Opus 5 is sales-gated). This is the `us.` cross-region inference profile id, not the bare foundation-model id. Changing it means also changing the ARN pair in iam.tf's agent_bedrock policy."
   type        = string
-  default     = "us.anthropic.claude-opus-5"
+  default     = "us.anthropic.claude-sonnet-4-6"
 }
 
 variable "agent_effort" {
-  description = "Opus 5 thinking depth (output_config.effort). The primary cost and latency lever - the M2 contract says to sweep low/medium/high against real transcripts, and this is the knob that sweep turns."
+  description = "Model thinking depth (output_config.effort). The primary cost and latency lever - the M2 contract says to sweep low/medium/high against real transcripts, and this is the knob that sweep turns."
   type        = string
   default     = "medium"
 

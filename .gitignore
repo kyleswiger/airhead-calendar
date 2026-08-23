@@ -40,3 +40,4 @@ backend.hcl
 # OS / editor
 .DS_Store
 *.swp
+.claude/

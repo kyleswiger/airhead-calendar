@@ -101,14 +101,19 @@ the deployed API.
 ## M2: the agent
 
 M2 adds a second Lambda (`airhead-agent`) and the `POST /api/agent/turn` route in front
-of it. The agent calls Claude Opus 5 through **AWS Bedrock** (`AnthropicBedrockMantle`
-in the `anthropic` SDK, model id `us.anthropic.claude-opus-5`), authenticated with the
-Lambda role's own SigV4 credentials.
+of it. The agent calls Claude Sonnet 4.6 through **AWS Bedrock** (legacy
+`AnthropicBedrock` client in the `anthropic` SDK — the bedrock-runtime InvokeModel
+path — model id `us.anthropic.claude-sonnet-4-6`), authenticated with the Lambda
+role's own SigV4 credentials. Not the Mantle endpoint and not Opus 5: this AWS
+account is not onboarded to bedrock-mantle, and Opus 5 / Sonnet 5 are access-gated
+on this account even on the legacy path (unlocking them means contacting AWS Sales).
+The model stays env-configurable (`AIRHEAD_AGENT_MODEL` / `var.agent_model`) for a
+future upgrade.
 
 **There is no API key.** No SSM parameter, no KMS key, no out-of-band `put-parameter`
 step — access is the `bedrock:InvokeModel*` grant on the agent role in `iam.tf`, and
 model spend appears on the AWS bill. The one prerequisite outside Terraform: the
-account must have **Bedrock model access for Anthropic Claude Opus 5 enabled in
+account must have **Bedrock model access for the configured Claude model enabled in
 us-east-1** (Bedrock console → Model access). Without it, the first turn fails with an
 AccessDenied from Bedrock even though IAM is correct.
 

@@ -170,8 +170,9 @@ resource "aws_lambda_function" "agent" {
   }
 
   # NO VPC CONFIGURATION. The reasoning on the api function above applies unchanged,
-  # and one thing more: this function's only outbound dependency is Bedrock's Mantle
-  # endpoint (bedrock-mantle.us-east-1.api.aws), a public SigV4 endpoint. In a VPC it
+  # and one thing more: this function's only outbound dependency is the
+  # bedrock-runtime endpoint (bedrock-runtime.us-east-1.amazonaws.com), a public
+  # SigV4 endpoint. In a VPC it
   # would need a NAT gateway
   # - not an interface endpoint - which is the most expensive way this stack could
   # possibly reach the internet, on a $7-13/month budget (PRD §16).
@@ -186,7 +187,7 @@ resource "aws_lambda_function" "agent" {
       AIRHEAD_REPO_BACKEND = "dynamodb"
 
       # No API key variable, and no SSM parameter name either: the function invokes
-      # Claude through Bedrock's Mantle endpoint, SigV4-signed with this role's own
+      # Claude through the legacy bedrock-runtime InvokeModel endpoint, SigV4-signed with this role's own
       # credentials, and Lambda injects AWS_REGION on its own. The whole secret
       # distribution problem this block used to document is gone - auth is the
       # bedrock:InvokeModel* grant in iam.tf, billing is the AWS bill.
@@ -195,8 +196,7 @@ resource "aws_lambda_function" "agent" {
       # is the primary cost/latency lever and the contract explicitly says to sweep
       # low/medium/high against real transcripts - which is a variable change and an
       # apply, not a rebuild. Note what is absent: no temperature, top_p, or top_k,
-      # which Opus 5 rejects outright, and no budget_tokens, which is removed and
-      # returns a 400.
+      # and no budget_tokens - depth is output_config.effort.
       AIRHEAD_AGENT_MODEL      = var.agent_model
       AIRHEAD_AGENT_EFFORT     = var.agent_effort
       AIRHEAD_AGENT_MAX_TOKENS = tostring(var.agent_max_tokens)
