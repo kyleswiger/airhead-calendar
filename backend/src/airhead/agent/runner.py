@@ -27,6 +27,7 @@ from airhead.agent.tools import (
     settle_confirmation,
 )
 from airhead.domain import Member
+from airhead.history import to_wire_content, to_wire_message
 from airhead.repo.base import EventRepo, MemberRepo
 
 __all__ = [
@@ -145,12 +146,19 @@ def run_turn(request: TurnRequest, *, deps: AgentDeps) -> TurnResult:
         # The runner keeps its own history and does not expose it, so mirror it
         # here; `generate_tool_call_response` is cached, so the tools still run
         # exactly once per turn.
-        history.append({"role": "assistant", "content": message.content})
+        #
+        # `message.content` is a list of SDK block *objects*. It is converted to
+        # wire dicts before it goes anywhere near the store: this history is the
+        # next turn's `messages` prefix, and a block that reaches JSON as its
+        # `repr()` is a 400 from the model on that turn (issue #5).
+        history.append({"role": "assistant", "content": to_wire_content(message.content)})
         if getattr(message, "stop_reason", None) == "refusal":
             break
         response = runner.generate_tool_call_response()
         if response is not None:
-            history.append(response)
+            # Already a `BetaMessageParam` of plain dicts today, since every tool
+            # returns a string — normalized anyway so that stops being load-bearing.
+            history.append(to_wire_message(response))
 
     result = TurnResult(
         reply=_reply(last),
