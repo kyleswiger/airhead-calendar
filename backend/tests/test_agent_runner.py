@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from anthropic.lib.tools import ToolError
+from anthropic.types.beta import BetaTextBlock, BetaToolUseBlock
 
 from airhead.agent.runner import (
     REFUSAL_REPLY,
@@ -202,6 +203,42 @@ def test_a_turn_that_creates_an_event() -> None:
     assert [m["role"] for m in result.history] == ["user", "assistant", "user", "assistant"]
     assert client.requests[0]["model"] == "us.anthropic.claude-sonnet-4-6"
     assert client.requests[0]["output_config"] == {"effort": "medium"}
+
+
+def test_history_holds_json_native_blocks_only() -> None:
+    """Issue #5. History is the next turn's `messages` prefix, so it has to survive
+    `json.dumps` without `default=str` — a block that lands as a `repr()` string is a
+    400 from the model on turn 2, surfaced as a 502."""
+    _, deps, _ = harness(
+        [
+            FakeMessage(
+                content=[
+                    BetaTextBlock(type="text", text="Checking."),
+                    BetaToolUseBlock(
+                        type="tool_use", id="toolu_bdrk_1", name="list_members", input={}
+                    ),
+                ],
+                stop_reason="tool_use",
+            ),
+            says("Alex, Sam and Riley."),
+        ]
+    )
+    result = ask(deps, "who lives here?")
+
+    # No `default=` — anything not JSON-native raises here.
+    dumped = json.dumps(result.history)
+    assert "BetaToolUseBlock" not in dumped
+    for message in result.history:
+        content = message["content"]
+        if isinstance(content, str):
+            continue
+        assert all(isinstance(block, dict) for block in content)
+    assert result.history[1]["content"][1] == {
+        "type": "tool_use",
+        "id": "toolu_bdrk_1",
+        "name": "list_members",
+        "input": {},
+    }
 
 
 def test_history_is_carried_into_the_next_turn() -> None:
