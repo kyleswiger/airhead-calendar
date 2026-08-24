@@ -24,6 +24,7 @@ its type, and a Pi-only deployment must not pay for an AWS SDK it never calls.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 from collections.abc import Callable, Iterator
@@ -33,8 +34,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
+from airhead.history import sanitize_history, to_wire_message
 from airhead.repo import decode_instant, encode_instant
 from airhead.repo.base import RepoError
+
+log = logging.getLogger("airhead.repo.turns")
 
 # PRD §7. Long enough to answer "what did it do last quarter", short enough that a
 # household's transcript is not kept indefinitely.
@@ -184,6 +188,26 @@ def _pending_from(raw: Any) -> PendingCall | None:
         event_id=raw.get("eventId"),
         args=json.loads(raw.get("argsJson") or "{}"),
     )
+
+
+def _history_json(turn: AgentTurn) -> str:
+    """The conversation history, as JSON that is still valid history when read back.
+
+    Every entry is normalized to plain wire dicts first. `default=str` stays only as
+    a crash guard for something genuinely unexpected — it must never be what makes a
+    content block serializable, because what it produces is a `repr()` string that
+    the model rejects on the next turn (issue #5).
+    """
+    return json.dumps([to_wire_message(m) for m in (turn.history or [])], default=str)
+
+
+def _history_from(raw: Any, conversation_id: str | None = None) -> list[dict[str, Any]]:
+    try:
+        loaded = json.loads(raw or "[]")
+    except (TypeError, ValueError):
+        log.warning("turn_history_unreadable", extra={"conversation_id": conversation_id})
+        return []
+    return sanitize_history(loaded, conversation_id=conversation_id)
 
 
 def _usage_dict(turn: AgentTurn) -> dict[str, int]:
@@ -347,7 +371,7 @@ def _turn_to_item(turn: AgentTurn) -> dict[str, Any]:
         # A JSON string, not a Map: history is whatever shape the SDK's message list
         # takes, and a nested Map would have to survive DynamoDB's type coercion
         # (floats, empty sets) on every round trip.
-        "historyJson": json.dumps(turn.history, default=str),
+        "historyJson": _history_json(turn),
         "usage": _usage_dict(turn),
         "ttl": turn.expires_at(),
     }
@@ -372,7 +396,7 @@ def _item_to_turn(item: dict[str, Any]) -> AgentTurn:
         reply=item.get("reply"),
         actions=_actions_from(item.get("actions")),
         pending=_pending_from(item.get("pending")),
-        history=json.loads(item.get("historyJson") or "[]"),
+        history=_history_from(item.get("historyJson"), item.get("conversationId")),
         usage=_usage_from(item.get("usage")),
         confirmed_call_id=item.get("confirmedCallId"),
     )
@@ -457,7 +481,7 @@ class SqliteTurnRepo:
                     turn.reply,
                     json.dumps(_action_dicts(turn)),
                     json.dumps(_pending_dict(turn)) if turn.pending else None,
-                    json.dumps(turn.history, default=str),
+                    _history_json(turn),
                     json.dumps(_usage_dict(turn)),
                     turn.confirmed_call_id,
                     turn.expires_at(),
@@ -515,7 +539,7 @@ def _row_to_turn(row: sqlite3.Row) -> AgentTurn:
         reply=row["reply"],
         actions=_actions_from(json.loads(row["actions"])),
         pending=_pending_from(json.loads(row["pending"]) if row["pending"] else None),
-        history=json.loads(row["history"]),
+        history=_history_from(row["history"], row["conversation_id"]),
         usage=_usage_from(json.loads(row["usage"])),
         confirmed_call_id=row["confirmed_call_id"],
     )

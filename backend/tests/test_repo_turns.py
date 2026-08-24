@@ -7,11 +7,14 @@ other and the audit log is the thing that has to survive a backend swap intact.
 
 from __future__ import annotations
 
+import json
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
+from anthropic.types.beta import BetaTextBlock, BetaToolUseBlock
 
 from airhead.repo.sqlite import connect
 from airhead.repo.turns import (
@@ -91,6 +94,33 @@ def ttl_values(backend: Backend) -> list[int]:
         return [r["ttl"] for r in rows]
     items = backend.raw.scan().get("Items", [])
     return [item["ttl"] for item in items if item.get("entity") == "agentTurn"]
+
+
+def raw_history_json(backend: Backend) -> str:
+    """The stored history exactly as the store holds it — the JSON string itself."""
+    if backend.name == "sqlite":
+        row = backend.raw.execute("SELECT history FROM agent_turns").fetchone()
+        return row["history"]
+    return _dynamo_turn_item(backend)["historyJson"]
+
+
+def overwrite_history_json(backend: Backend, raw: str) -> None:
+    """Plant a stored history the current writer would never produce."""
+    if backend.name == "sqlite":
+        backend.raw.execute("UPDATE agent_turns SET history = ?", (raw,))
+        backend.raw.commit()
+        return
+    item = _dynamo_turn_item(backend)
+    backend.raw.update_item(
+        Key={"PK": item["PK"], "SK": item["SK"]},
+        UpdateExpression="SET historyJson = :h",
+        ExpressionAttributeValues={":h": raw},
+    )
+
+
+def _dynamo_turn_item(backend: Backend) -> dict[str, Any]:
+    items = backend.raw.scan().get("Items", [])
+    return next(item for item in items if item.get("entity") == "agentTurn")
 
 
 class TestRoundTrip:
@@ -268,3 +298,114 @@ class TestPurge:
 class TestProtocol:
     def test_both_backends_satisfy_the_protocol(self, backend):
         assert isinstance(backend.turns, TurnRepo)
+
+
+class TestHistorySerialization:
+    """Issue #5: turn 2 of a conversation was a reproducible 502.
+
+    The runner appended the SDK's response blocks to `history` as objects, and
+    `json.dumps(..., default=str)` stringified each one into its Python `repr()`.
+    Nothing failed on write; the *next* turn replayed that history and Bedrock
+    rejected it with a 400, which the route wrapped into a generic 502.
+    """
+
+    def test_sdk_blocks_are_stored_as_wire_shaped_json(self, backend):
+        backend.turns.put(
+            make_turn(
+                "turn_1",
+                history=[
+                    {"role": "user", "content": "add soccer thursday at 4"},
+                    {
+                        "role": "assistant",
+                        # The real SDK response types, not dicts — this is what the
+                        # runner actually holds after a tool-calling turn.
+                        "content": [
+                            BetaTextBlock(type="text", text="Let me check."),
+                            BetaToolUseBlock(
+                                type="tool_use",
+                                id="toolu_bdrk_1",
+                                name="create_event",
+                                input={"title": "Soccer practice", "tier": "T2"},
+                            ),
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "toolu_bdrk_1",
+                                "content": "Saved.",
+                            }
+                        ],
+                    },
+                ],
+            )
+        )
+
+        # Nothing reached the store as a `repr()`.
+        stored_json = raw_history_json(backend)
+        assert "BetaToolUseBlock" not in stored_json
+        assert "BetaTextBlock" not in stored_json
+
+        stored = backend.turns.latest(HOUSEHOLD, "cnv_1")
+        assert stored is not None
+        blocks = stored.history[1]["content"]
+        assert all(isinstance(b, dict) for b in blocks)
+        assert blocks[0] == {"type": "text", "text": "Let me check."}
+        assert blocks[1] == {
+            "type": "tool_use",
+            "id": "toolu_bdrk_1",
+            "name": "create_event",
+            "input": {"title": "Soccer practice", "tier": "T2"},
+        }
+        # ...and it is still a valid request body on the way back out.
+        assert json.loads(json.dumps(stored.history)) == stored.history
+
+    def test_a_corrupted_stored_history_is_dropped_not_raised(self, backend, caplog):
+        """Rows written before the fix must degrade to amnesia, not to a 502."""
+        backend.turns.put(make_turn("turn_1"))
+        overwrite_history_json(
+            backend,
+            json.dumps(
+                [
+                    {"role": "user", "content": "add soccer thursday at 4"},
+                    {
+                        "role": "assistant",
+                        "content": [
+                            "BetaToolUseBlock(id='toolu_bdrk_1', input={'title': 'Soccer "
+                            "practice'}, name='create_event', type='tool_use')"
+                        ],
+                    },
+                ]
+            ),
+        )
+
+        with caplog.at_level(logging.WARNING):
+            stored = backend.turns.latest(HOUSEHOLD, "cnv_1")
+
+        assert stored is not None
+        assert stored.turn_id == "turn_1"
+        assert stored.history == []
+        assert "turn_history_dropped" in caplog.text
+
+    def test_unparseable_history_is_dropped_not_raised(self, backend, caplog):
+        backend.turns.put(make_turn("turn_1"))
+        overwrite_history_json(backend, "{not json at all")
+
+        with caplog.at_level(logging.WARNING):
+            stored = backend.turns.latest(HOUSEHOLD, "cnv_1")
+
+        assert stored is not None
+        assert stored.history == []
+        assert "turn_history_unreadable" in caplog.text
+
+    def test_a_well_formed_history_is_left_alone(self, backend):
+        history = [
+            {"role": "user", "content": "anything thursday?"},
+            {"role": "assistant", "content": [{"type": "text", "text": "Nothing."}]},
+        ]
+        backend.turns.put(make_turn("turn_1", history=history))
+        stored = backend.turns.latest(HOUSEHOLD, "cnv_1")
+        assert stored is not None
+        assert stored.history == history
