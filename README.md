@@ -152,8 +152,9 @@ three simultaneous turns in a three-person household something is wrong.
 
 ## Status
 
-M0 complete — infrastructure, CI, and a placeholder display. See the milestone table in the
-PRD for what's next.
+M2 in progress — agent: tool loop, chat on screen, create/delete/get-day. Exit criteria is
+S3: "add soccer thursday 4pm" works end to end. See the milestone table in the PRD for
+what's next.
 
 ## License
 
