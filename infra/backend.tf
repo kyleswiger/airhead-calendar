@@ -11,7 +11,7 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.60"
+      version = "~> 6.61"
     }
 
     # Zips the Lambda package built by backend/build-lambda.sh. A module may only
