@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/kyleswiger/airhead-calendar/compare/v1.0.0...v1.0.1) (2026-09-03)
+
+
+### Performance Improvements
+
+* **agent:** default agent_effort to low (issue [#9](https://github.com/kyleswiger/airhead-calendar/issues/9) sweep, step 1) ([#23](https://github.com/kyleswiger/airhead-calendar/issues/23))d ([e77ce01](https://github.com/kyleswiger/airhead-calendar/commit/e77ce0162dac70775927c2a8155e1274fb05c47d))
+
 ## 1.0.0 (2026-08-27)
 
 
