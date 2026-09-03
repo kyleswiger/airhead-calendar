@@ -139,7 +139,12 @@ variable "agent_model" {
 variable "agent_effort" {
   description = "Model thinking depth (output_config.effort). The primary cost and latency lever - the M2 contract says to sweep low/medium/high against real transcripts, and this is the knob that sweep turns."
   type        = string
-  default     = "medium"
+  # First step of that sweep (issue #9). At medium, a cold turn-1 tool loop measured
+  # 14.2s and 14.9s against the <8s S3 target; a cached turn 2 was 2.2s, so the
+  # excess is thinking on the uncached tool loop, which effort governs directly.
+  # Raise back to medium if low starts mis-parsing dates or skipping the
+  # find_conflicts call before create_event - those are the failure modes to watch.
+  default = "low"
 
   validation {
     condition     = contains(["low", "medium", "high"], var.agent_effort)
