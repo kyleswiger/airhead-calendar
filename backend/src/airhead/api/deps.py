@@ -18,7 +18,7 @@ from fastapi import Depends, Header
 
 from airhead.api.errors import Unauthorized
 from airhead.domain import Member
-from airhead.repo.base import EventRepo, MemberRepo, SourceRepo
+from airhead.repo.base import EventRepo, MemberRepo, RoutineRepo, SourceRepo
 from airhead.repo.turns import TurnRepo
 
 
@@ -51,12 +51,13 @@ def get_settings() -> Settings:
 
 
 @lru_cache(maxsize=1)
-def _repos() -> tuple[EventRepo, MemberRepo, SourceRepo, TurnRepo]:
+def _repos() -> tuple[EventRepo, MemberRepo, SourceRepo, TurnRepo, RoutineRepo]:
     settings = get_settings()
     if settings.backend == "sqlite":
         from airhead.repo.sqlite import (
             SqliteEventRepo,
             SqliteMemberRepo,
+            SqliteRoutineRepo,
             SqliteSourceRepo,
             connect,
         )
@@ -68,10 +69,16 @@ def _repos() -> tuple[EventRepo, MemberRepo, SourceRepo, TurnRepo]:
             SqliteMemberRepo(conn),
             SqliteSourceRepo(conn),
             SqliteTurnRepo(conn),
+            SqliteRoutineRepo(conn),
         )
 
     # Imported lazily: this is the only line in the API package that pulls in boto3.
-    from airhead.repo.dynamo import DynamoEventRepo, DynamoMemberRepo, DynamoSourceRepo
+    from airhead.repo.dynamo import (
+        DynamoEventRepo,
+        DynamoMemberRepo,
+        DynamoRoutineRepo,
+        DynamoSourceRepo,
+    )
     from airhead.repo.turns import DynamoTurnRepo
 
     table = settings.table_name
@@ -80,6 +87,7 @@ def _repos() -> tuple[EventRepo, MemberRepo, SourceRepo, TurnRepo]:
         DynamoMemberRepo(table),
         DynamoSourceRepo(table),
         DynamoTurnRepo(table),
+        DynamoRoutineRepo(table),
     )
 
 
@@ -105,6 +113,10 @@ def get_source_repo() -> SourceRepo:
 
 def get_turn_repo() -> TurnRepo:
     return _repos()[3]
+
+
+def get_routine_repo() -> RoutineRepo:
+    return _repos()[4]
 
 
 @lru_cache(maxsize=1)
@@ -185,6 +197,7 @@ Events = Annotated[EventRepo, Depends(get_event_repo)]
 Members = Annotated[MemberRepo, Depends(get_member_repo)]
 Sources = Annotated[SourceRepo, Depends(get_source_repo)]
 Turns = Annotated[TurnRepo, Depends(get_turn_repo)]
+Routines = Annotated[RoutineRepo, Depends(get_routine_repo)]
 Runner = Annotated[Any, Depends(get_runner)]
 AgentRuntime = Annotated[Any, Depends(get_agent_deps)]
 HouseholdId = Annotated[str, Depends(get_household_id)]

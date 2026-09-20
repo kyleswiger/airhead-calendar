@@ -16,11 +16,13 @@ from fastapi.testclient import TestClient
 from airhead.api import deps
 from airhead.api.app import app
 from airhead.domain import (
+    Completion,
     Event,
     EventSource,
     EventStatus,
     Member,
     MemberRole,
+    Routine,
     Source,
     SourceKind,
     Tier,
@@ -108,6 +110,57 @@ class InMemorySourceRepo:
         return replace(source)
 
 
+class InMemoryRoutineRepo:
+    def __init__(self, routines: list[Routine] | None = None) -> None:
+        self._routines: dict[tuple[str, str], Routine] = {}
+        self._completions: dict[tuple[str, str, str], Completion] = {}
+        for routine in routines or []:
+            self.put(routine)
+
+    def get(self, household_id: str, routine_id: str) -> Routine | None:
+        stored = self._routines.get((household_id, routine_id))
+        return copy.deepcopy(stored) if stored else None
+
+    def put(self, routine: Routine) -> Routine:
+        stored = copy.deepcopy(routine)
+        stored.updated_at = datetime.now(UTC)
+        self._routines[(stored.household_id, stored.routine_id)] = stored
+        return copy.deepcopy(stored)
+
+    def delete(self, household_id: str, routine_id: str, *, at: datetime) -> Routine | None:
+        stored = self._routines.get((household_id, routine_id))
+        if stored is None:
+            return None
+        stored.deleted_at = at
+        return copy.deepcopy(stored)
+
+    def list(self, household_id: str, *, include_deleted: bool = False) -> list[Routine]:
+        hits = [
+            copy.deepcopy(r)
+            for r in self._routines.values()
+            if r.household_id == household_id and (include_deleted or not r.is_deleted)
+        ]
+        return sorted(hits, key=lambda r: r.routine_id)
+
+    def add_completion(self, completion: Completion) -> Completion:
+        stored = copy.deepcopy(completion)
+        stored.created_at = stored.created_at or datetime.now(UTC)
+        key = (stored.household_id, stored.routine_id, stored.completion_id)
+        self._completions[key] = stored
+        return copy.deepcopy(stored)
+
+    def list_completions(self, household_id: str, routine_id: str) -> list[Completion]:
+        hits = [
+            copy.deepcopy(c)
+            for (hh, rid, _), c in self._completions.items()
+            if hh == household_id and rid == routine_id
+        ]
+        return sorted(hits, key=lambda c: (c.done_on, c.completion_id))
+
+    def delete_completion(self, household_id: str, routine_id: str, completion_id: str) -> bool:
+        return self._completions.pop((household_id, routine_id, completion_id), None) is not None
+
+
 # --- fixtures ----------------------------------------------------------------
 
 ALEX = Member(
@@ -176,7 +229,9 @@ def build_client(
     event_repo = InMemoryEventRepo(events)
     member_repo = InMemoryMemberRepo(members if members is not None else ROSTER)
     source_repo = InMemorySourceRepo()
+    routine_repo = InMemoryRoutineRepo()
 
+    app.dependency_overrides[deps.get_routine_repo] = lambda: routine_repo
     app.dependency_overrides[deps.get_event_repo] = lambda: event_repo
     app.dependency_overrides[deps.get_member_repo] = lambda: member_repo
     app.dependency_overrides[deps.get_source_repo] = lambda: source_repo

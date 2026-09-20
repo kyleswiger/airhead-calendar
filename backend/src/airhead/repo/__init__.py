@@ -23,6 +23,7 @@ from airhead.repo.base import (
     NotFound,
     Page,
     RepoError,
+    RoutineRepo,
     SourceRepo,
 )
 
@@ -34,6 +35,7 @@ __all__ = [
     "NotFound",
     "Page",
     "RepoError",
+    "RoutineRepo",
     "SourceRepo",
     "decode_instant",
     "decode_instants",

@@ -368,6 +368,7 @@ def _event_to_item(event: Event) -> dict[str, Any]:
         "mergeGroupId": event.merge_group_id,
         "recurrenceParentId": event.recurrence_parent_id,
         "recurrenceId": event.recurrence_id,
+        "routineId": event.routine_id,
         "createdBy": event.created_by,
     }
     item.update({k: v for k, v in optional.items() if v is not None})
@@ -409,6 +410,7 @@ def _item_to_event(item: dict[str, Any]) -> Event:
         merge_group_id=item.get("mergeGroupId"),
         recurrence_parent_id=item.get("recurrenceParentId"),
         recurrence_id=item.get("recurrenceId"),
+        routine_id=item.get("routineId"),
         created_by=item.get("createdBy"),
         updated_at=decode_instant(item["updatedAt"]) if item.get("updatedAt") else None,
         deleted_at=decode_instant(item["deletedAt"]) if item.get("deletedAt") else None,

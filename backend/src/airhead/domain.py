@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 
 
@@ -53,6 +53,24 @@ class SourceKind(StrEnum):
 class MemberRole(StrEnum):
     ADULT = "adult"
     MINOR = "minor"
+
+
+class IntervalSource(StrEnum):
+    """Where a routine's cadence came from (ROUTINES-CONTRACT ground rule 1).
+
+    Ordered by authority: a number a person stated is sticky and nothing
+    below it may overwrite it, exactly like `TierSource.HUMAN`.
+    """
+
+    HUMAN = "human"  # The person said how often.
+    OBSERVED = "observed"  # Median gap between real completions - the household's true cadence.
+    CATALOG = "catalog"  # Matched the curated table of common items.
+    ESTIMATED = "estimated"  # A model guess, stored with rationale + confidence.
+
+
+class Anchor(StrEnum):
+    ELAPSED = "elapsed"  # Due N days after the last completion (haircut, oil change).
+    CALENDAR = "calendar"  # Due on the same month/day every year (holiday lights).
 
 
 # Which source wins when a merge group picks its canonical record. Lower is better.
@@ -128,6 +146,9 @@ class Event:
     merge_group_id: str | None = None
     recurrence_parent_id: str | None = None
     recurrence_id: str | None = None  # Original start of the instance this override replaces.
+    # Set on the one all-day event a routine owns for its due date; the display
+    # renders a DUE chip and a tap-to-complete affordance off it.
+    routine_id: str | None = None
     created_by: str | None = None
     updated_at: datetime | None = None
     # Soft delete only. Source records are immutable truth and an unmerge or an
@@ -178,3 +199,56 @@ def apply_remote_update(existing: Event, incoming: Event) -> Event:
         incoming.tier_source = TierSource.HUMAN
 
     return incoming
+
+
+@dataclass(slots=True)
+class Routine:
+    """Something the household does every so often - see docs/ROUTINES-CONTRACT.md.
+
+    A routine records when it was *last done* and projects when it is *next due*
+    onto the calendar as one all-day event (`due_event_id`). The mental load
+    this removes is exactly "how long has it been since we…?".
+    """
+
+    routine_id: str
+    household_id: str
+    name: str
+    owner_member_id: str
+    category: str = "other"
+    interval_days: int | None = None  # None = unknown; the routine is `unscheduled`.
+    interval_source: IntervalSource = IntervalSource.ESTIMATED
+    interval_note: str | None = None  # One line of "why" - catalog note or model rationale.
+    interval_confidence: float | None = None  # 0..1, ESTIMATED only.
+    anchor: Anchor = Anchor.ELAPSED
+    involves: list[str] = field(default_factory=list)
+    tier: Tier = Tier.PERSONAL
+    visibility: Visibility = Visibility.ALL
+    catalog_key: str | None = None
+    last_done_on: date | None = None  # Denormalised from completions.
+    due_on: date | None = None  # Projected, or an explicit snooze kept until the next completion.
+    due_event_id: str | None = None  # The one calendar event this routine owns.
+    paused: bool = False
+    created_by: str | None = None
+    updated_at: datetime | None = None
+    deleted_at: datetime | None = None  # Soft delete, like events.
+
+    @property
+    def is_deleted(self) -> bool:
+        return self.deleted_at is not None
+
+    @property
+    def interval_is_human(self) -> bool:
+        return self.interval_days is not None and self.interval_source is IntervalSource.HUMAN
+
+
+@dataclass(slots=True)
+class Completion:
+    """One "we did it" fact. Deleting one is the undo for a mis-tap."""
+
+    completion_id: str
+    household_id: str
+    routine_id: str
+    done_on: date
+    by_member_id: str
+    note: str | None = None
+    created_at: datetime | None = None

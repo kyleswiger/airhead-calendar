@@ -13,15 +13,19 @@ import sqlite3
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from airhead.domain import (
+    Anchor,
+    Completion,
     Event,
     EventSource,
     EventStatus,
+    IntervalSource,
     Member,
     MemberRole,
+    Routine,
     Source,
     SourceKind,
     Tier,
@@ -58,6 +62,7 @@ CREATE TABLE IF NOT EXISTS events (
     merge_group_id       TEXT,
     recurrence_parent_id TEXT,
     recurrence_id        TEXT,
+    routine_id           TEXT,
     created_by           TEXT,
     updated_at           TEXT,
     deleted_at           TEXT,
@@ -92,7 +97,59 @@ CREATE TABLE IF NOT EXISTS sources (
     enabled         INTEGER NOT NULL,
     PRIMARY KEY (household_id, source_id)
 );
+
+CREATE TABLE IF NOT EXISTS routines (
+    household_id        TEXT NOT NULL,
+    routine_id          TEXT NOT NULL,
+    name                TEXT NOT NULL,
+    owner_member_id     TEXT NOT NULL,
+    category            TEXT NOT NULL,
+    interval_days       INTEGER,
+    interval_source     TEXT NOT NULL,
+    interval_note       TEXT,
+    interval_confidence REAL,
+    anchor              TEXT NOT NULL,
+    involves            TEXT NOT NULL,
+    tier                TEXT NOT NULL,
+    visibility          TEXT NOT NULL,
+    catalog_key         TEXT,
+    last_done_on        TEXT,
+    due_on              TEXT,
+    due_event_id        TEXT,
+    paused              INTEGER NOT NULL DEFAULT 0,
+    created_by          TEXT,
+    updated_at          TEXT,
+    deleted_at          TEXT,
+    PRIMARY KEY (household_id, routine_id)
+);
+
+CREATE TABLE IF NOT EXISTS routine_completions (
+    household_id  TEXT NOT NULL,
+    routine_id    TEXT NOT NULL,
+    completion_id TEXT NOT NULL,
+    done_on       TEXT NOT NULL,
+    by_member_id  TEXT NOT NULL,
+    note          TEXT,
+    created_at    TEXT,
+    PRIMARY KEY (household_id, routine_id, completion_id)
+);
+CREATE INDEX IF NOT EXISTS idx_completions_routine
+    ON routine_completions (household_id, routine_id, done_on, completion_id);
 """
+
+# Columns added after a table first shipped. `CREATE TABLE IF NOT EXISTS` never
+# alters an existing file-backed database (a Pi deployment), so each one is
+# applied idempotently here.
+_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
+    ("events", "routine_id", "ALTER TABLE events ADD COLUMN routine_id TEXT"),
+)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    for table, column, ddl in _MIGRATIONS:
+        present = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in present:
+            conn.execute(ddl)
 
 
 def connect(path: str | Path = ":memory:") -> sqlite3.Connection:
@@ -100,6 +157,7 @@ def connect(path: str | Path = ":memory:") -> sqlite3.Connection:
     conn = sqlite3.connect(str(path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript(_SCHEMA)
+    _migrate(conn)
     conn.commit()
     return conn
 
@@ -171,9 +229,9 @@ class SqliteEventRepo(_SqliteRepo):
                     household_id, event_id, title, start_utc, end_utc, tz, all_day, rrule,
                     exdates, owner_member_id, involves, location, tier, tier_source,
                     visibility, status, source_kind, source_id, external_id, etag,
-                    merge_group_id, recurrence_parent_id, recurrence_id, created_by,
-                    updated_at, deleted_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    merge_group_id, recurrence_parent_id, recurrence_id, routine_id,
+                    created_by, updated_at, deleted_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     stored.household_id,
@@ -199,6 +257,7 @@ class SqliteEventRepo(_SqliteRepo):
                     stored.merge_group_id,
                     stored.recurrence_parent_id,
                     stored.recurrence_id,
+                    stored.routine_id,
                     stored.created_by,
                     encode_instant(stored.updated_at) if stored.updated_at else None,
                     encode_instant(stored.deleted_at) if stored.deleted_at else None,
@@ -270,6 +329,117 @@ class SqliteEventRepo(_SqliteRepo):
                 (source_id, external_id),
             ).fetchone()
         return _row_to_event(row) if row else None
+
+
+class SqliteRoutineRepo(_SqliteRepo):
+    def get(self, household_id: str, routine_id: str) -> Routine | None:
+        with _translate():
+            row = self.conn.execute(
+                "SELECT * FROM routines WHERE household_id = ? AND routine_id = ?",
+                (household_id, routine_id),
+            ).fetchone()
+        return _row_to_routine(row) if row else None
+
+    def put(self, routine: Routine) -> Routine:
+        stored = replace(routine, updated_at=self._clock())
+        with _translate():
+            self.conn.execute(
+                """
+                INSERT OR REPLACE INTO routines (
+                    household_id, routine_id, name, owner_member_id, category, interval_days,
+                    interval_source, interval_note, interval_confidence, anchor, involves, tier,
+                    visibility, catalog_key, last_done_on, due_on, due_event_id, paused,
+                    created_by, updated_at, deleted_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    stored.household_id,
+                    stored.routine_id,
+                    stored.name,
+                    stored.owner_member_id,
+                    stored.category,
+                    stored.interval_days,
+                    stored.interval_source.value,
+                    stored.interval_note,
+                    stored.interval_confidence,
+                    stored.anchor.value,
+                    json.dumps(list(stored.involves)),
+                    stored.tier.value,
+                    stored.visibility.value,
+                    stored.catalog_key,
+                    stored.last_done_on.isoformat() if stored.last_done_on else None,
+                    stored.due_on.isoformat() if stored.due_on else None,
+                    stored.due_event_id,
+                    int(stored.paused),
+                    stored.created_by,
+                    encode_instant(stored.updated_at) if stored.updated_at else None,
+                    encode_instant(stored.deleted_at) if stored.deleted_at else None,
+                ),
+            )
+            self.conn.commit()
+        return stored
+
+    def delete(self, household_id: str, routine_id: str, *, at: datetime) -> Routine | None:
+        existing = self.get(household_id, routine_id)
+        if existing is None:
+            return None
+        with _translate():
+            self.conn.execute(
+                "UPDATE routines SET deleted_at = ?, updated_at = ? "
+                "WHERE household_id = ? AND routine_id = ?",
+                (encode_instant(at), encode_instant(self._clock()), household_id, routine_id),
+            )
+            self.conn.commit()
+        return self.get(household_id, routine_id)
+
+    def list(self, household_id: str, *, include_deleted: bool = False) -> list[Routine]:
+        sql = "SELECT * FROM routines WHERE household_id = ?"
+        if not include_deleted:
+            sql += " AND deleted_at IS NULL"
+        with _translate():
+            rows = self.conn.execute(sql + " ORDER BY routine_id", (household_id,)).fetchall()
+        return [_row_to_routine(r) for r in rows]
+
+    def add_completion(self, completion: Completion) -> Completion:
+        stored = replace(completion, created_at=completion.created_at or self._clock())
+        with _translate():
+            self.conn.execute(
+                """
+                INSERT OR REPLACE INTO routine_completions (
+                    household_id, routine_id, completion_id, done_on, by_member_id, note, created_at
+                ) VALUES (?,?,?,?,?,?,?)
+                """,
+                (
+                    stored.household_id,
+                    stored.routine_id,
+                    stored.completion_id,
+                    stored.done_on.isoformat(),
+                    stored.by_member_id,
+                    stored.note,
+                    encode_instant(stored.created_at) if stored.created_at else None,
+                ),
+            )
+            self.conn.commit()
+        return stored
+
+    def list_completions(self, household_id: str, routine_id: str) -> list[Completion]:
+        with _translate():
+            rows = self.conn.execute(
+                "SELECT * FROM routine_completions WHERE household_id = ? AND routine_id = ? "
+                "ORDER BY done_on, completion_id",
+                (household_id, routine_id),
+            ).fetchall()
+        return [_row_to_completion(r) for r in rows]
+
+    def delete_completion(self, household_id: str, routine_id: str, completion_id: str) -> bool:
+        with _translate():
+            cur = self.conn.execute(
+                "DELETE FROM routine_completions "
+                "WHERE household_id = ? AND routine_id = ? AND completion_id = ?",
+                (household_id, routine_id, completion_id),
+            )
+            self.conn.commit()
+        return cur.rowcount > 0
 
 
 class SqliteMemberRepo(_SqliteRepo):
@@ -374,9 +544,48 @@ def _row_to_event(row: sqlite3.Row) -> Event:
         merge_group_id=row["merge_group_id"],
         recurrence_parent_id=row["recurrence_parent_id"],
         recurrence_id=row["recurrence_id"],
+        routine_id=row["routine_id"],
         created_by=row["created_by"],
         updated_at=decode_instant(row["updated_at"]) if row["updated_at"] else None,
         deleted_at=decode_instant(row["deleted_at"]) if row["deleted_at"] else None,
+    )
+
+
+def _row_to_routine(row: sqlite3.Row) -> Routine:
+    return Routine(
+        routine_id=row["routine_id"],
+        household_id=row["household_id"],
+        name=row["name"],
+        owner_member_id=row["owner_member_id"],
+        category=row["category"],
+        interval_days=row["interval_days"],
+        interval_source=IntervalSource(row["interval_source"]),
+        interval_note=row["interval_note"],
+        interval_confidence=row["interval_confidence"],
+        anchor=Anchor(row["anchor"]),
+        involves=list(json.loads(row["involves"])),
+        tier=Tier(row["tier"]),
+        visibility=Visibility(row["visibility"]),
+        catalog_key=row["catalog_key"],
+        last_done_on=date.fromisoformat(row["last_done_on"]) if row["last_done_on"] else None,
+        due_on=date.fromisoformat(row["due_on"]) if row["due_on"] else None,
+        due_event_id=row["due_event_id"],
+        paused=bool(row["paused"]),
+        created_by=row["created_by"],
+        updated_at=decode_instant(row["updated_at"]) if row["updated_at"] else None,
+        deleted_at=decode_instant(row["deleted_at"]) if row["deleted_at"] else None,
+    )
+
+
+def _row_to_completion(row: sqlite3.Row) -> Completion:
+    return Completion(
+        completion_id=row["completion_id"],
+        household_id=row["household_id"],
+        routine_id=row["routine_id"],
+        done_on=date.fromisoformat(row["done_on"]),
+        by_member_id=row["by_member_id"],
+        note=row["note"],
+        created_at=decode_instant(row["created_at"]) if row["created_at"] else None,
     )
 
 
