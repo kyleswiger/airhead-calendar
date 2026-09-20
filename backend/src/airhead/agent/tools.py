@@ -41,19 +41,24 @@ from airhead.api.app import (
 )
 from airhead.api.errors import ApiError, Conflict, Forbidden, InvalidRequest, NotFound
 from airhead.domain import (
+    Anchor,
     Event,
     EventSource,
     EventStatus,
+    IntervalSource,
     Member,
+    Routine,
     SourceKind,
     Tier,
     TierSource,
     Visibility,
 )
-from airhead.repo.base import EventRepo, MemberRepo
+from airhead.repo.base import EventRepo, MemberRepo, RoutineRepo
+from airhead.routines import service
 
 TierName = Literal["T1", "T2", "T3"]
 VisibilityName = Literal["all", "adults"]
+AnchorName = Literal["elapsed", "calendar"]
 
 DEFAULT_DURATION = timedelta(hours=1)
 
@@ -111,6 +116,7 @@ class ToolContext:
     actor: Member
     events: EventRepo
     members: MemberRepo
+    routines: RoutineRepo
     now: datetime
     tz: str
     confirm: Confirmation | None = None
@@ -321,6 +327,73 @@ def _saved(ctx: ToolContext, event: Event, tool: str, note: str) -> str:
     stored = ctx.events.put(event)
     ctx.outcomes.append(ToolOutcome(tool=tool, status="ok", event_id=stored.event_id))
     return f"{note}\n{calendar_data(_row(ctx, stored))}"
+
+
+# --- routine helpers ---------------------------------------------------------
+
+
+def _today(ctx: ToolContext) -> date:
+    """The household-local date: a routine is done "on a day", never at an instant."""
+    return to_local(ctx.now, ctx.tz).date()
+
+
+def _visible_routine(ctx: ToolContext, routine_id: str) -> Routine:
+    """Load a routine the actor may see, or 404 — the same rule as `_visible`."""
+    stored = ctx.routines.get(ctx.household_id, routine_id)
+    if stored is None or not service.visible_to(ctx.actor, stored):
+        raise NotFound("No such routine.")
+    return stored
+
+
+def _routine_row(ctx: ToolContext, routine: Routine, *, today: date) -> dict[str, Any]:
+    """The `RoutineOut` shape from ROUTINES-CONTRACT § HTTP, camelCase."""
+    history = ctx.routines.list_completions(ctx.household_id, routine.routine_id)
+    return {
+        "routineId": routine.routine_id,
+        "name": routine.name,
+        "category": routine.category,
+        "ownerMemberId": routine.owner_member_id,
+        "memberIds": sorted({routine.owner_member_id, *routine.involves}),
+        "tier": routine.tier.value,
+        "visibility": routine.visibility.value,
+        "intervalDays": routine.interval_days,
+        "intervalSource": routine.interval_source.value if routine.interval_days else None,
+        "intervalNote": routine.interval_note,
+        "intervalConfidence": routine.interval_confidence,
+        "anchor": routine.anchor.value,
+        "catalogKey": routine.catalog_key,
+        "lastDoneOn": routine.last_done_on.isoformat() if routine.last_done_on else None,
+        "dueOn": routine.due_on.isoformat() if routine.due_on else None,
+        "dueEventId": routine.due_event_id,
+        "status": service.status(routine, today=today),
+        "daysUntilDue": service.days_until_due(routine, today=today),
+        "completionCount": len(history),
+        "paused": routine.paused,
+    }
+
+
+def _routine_saved(ctx: ToolContext, routine: Routine, tool: str, note: str) -> str:
+    """Record a routine write. `event_id` is the due event, the routine id is `detail`."""
+    ctx.outcomes.append(
+        ToolOutcome(
+            tool=tool, status="ok", event_id=routine.due_event_id, detail=routine.routine_id
+        )
+    )
+    return f"{note}\n{calendar_data(_routine_row(ctx, routine, today=_today(ctx)))}"
+
+
+def _interval_note(routine: Routine) -> str:
+    """One line telling the model how much to trust the cadence it just stored."""
+    if routine.interval_days is None:
+        return "No interval is known, so it is unscheduled; ask how often if it matters."
+    if routine.interval_source is IntervalSource.ESTIMATED:
+        return (
+            f"The {routine.interval_days}-day interval is an estimate. Tell the person the "
+            "cadence you assumed in plain words and that they can correct it."
+        )
+    if routine.interval_source is IntervalSource.CATALOG:
+        return f"Interval of {routine.interval_days} days came from the catalog."
+    return f"Interval is {routine.interval_days} days."
 
 
 # --- implementations ---------------------------------------------------------
@@ -684,6 +757,248 @@ def _unmerge(ctx: ToolContext, group_id: str) -> str:
     return f"Unmerged {len(members)} events."
 
 
+# --- routines ----------------------------------------------------------------
+#
+# Thin wrappers over `airhead.routines.service`, exactly as the event tools mirror
+# `app.py`: the HTTP routes and these tools must behave identically.
+
+
+def _list_routines(ctx: ToolContext) -> str:
+    today = _today(ctx)
+    # Same as GET /api/routines: re-project first so an overdue due-event has
+    # already been rolled to today, then filter at the query layer.
+    rows = service.reproject_all(
+        ctx.routines, ctx.events, household_id=ctx.household_id, today=today, tz=ctx.tz
+    )
+    visible = [r for r in rows if service.visible_to(ctx.actor, r)]
+    visible.sort(key=lambda r: service.sort_key(r, today=today))
+    return calendar_data(
+        {
+            "today": today.isoformat(),
+            "routines": [_routine_row(ctx, r, today=today) for r in visible],
+        }
+    )
+
+
+def _log_done(ctx: ToolContext, routine_id: str, done_on: str | None, note: str | None) -> str:
+    stored = _visible_routine(ctx, routine_id)
+    today = _today(ctx)
+    when = _parse_date(done_on, "done_on") if done_on else None
+    try:
+        routine, completion = service.complete(
+            stored,
+            ctx.routines,
+            ctx.events,
+            by=ctx.actor,
+            done_on=when,
+            note=note,
+            today=today,
+            tz=ctx.tz,
+        )
+    except service.FutureCompletion as exc:
+        raise InvalidRequest(str(exc), code="future_completion") from exc
+    ctx.outcomes.append(
+        ToolOutcome(
+            tool="log_done", status="ok", event_id=routine.due_event_id, detail=routine.routine_id
+        )
+    )
+    row = _routine_row(ctx, routine, today=today)
+    return (
+        f"Logged as done on {completion.done_on.isoformat()}.\n"
+        f"{calendar_data({'completionId': completion.completion_id, 'routine': row})}"
+    )
+
+
+def _create_routine(
+    ctx: ToolContext,
+    name: str,
+    interval_days: int | None,
+    interval_stated_by_person: bool,
+    interval_note: str | None,
+    interval_confidence: float | None,
+    last_done_on: str | None,
+    due_on: str | None,
+    anchor: str | None,
+    category: str | None,
+    owner_member_id: str | None,
+    involves: list[str] | None,
+    tier: str,
+    visibility: str | None,
+) -> str:
+    if not name.strip():
+        raise InvalidRequest("`name` is required.")
+    owner = owner_member_id or ctx.actor.member_id
+    if not ctx.actor.is_adult and owner != ctx.actor.member_id:
+        raise Forbidden("Minors may only create routines for themselves.")
+    if visibility is not None:
+        ensure_may_set_visibility(ctx.actor)
+    known = _known_members(ctx)
+    if owner not in known:
+        raise InvalidRequest("Unknown member id in `owner_member_id`.")
+    people = _check_members(ctx, involves or [], "involves")
+    if interval_days is not None and interval_days < 1:
+        raise InvalidRequest("`interval_days` must be at least 1.")
+    today = _today(ctx)
+    first_done = _parse_date(last_done_on, "last_done_on") if last_done_on else None
+    if first_done is not None and first_done > today:
+        # Checked here rather than left to `service.complete`, which would raise
+        # only after the routine row had already been written.
+        raise InvalidRequest("`last_done_on` may not be in the future.", code="future_completion")
+
+    # Ground rule 1: the person's number is `human`; the model's guess is an
+    # `estimated` resolution that `service.create` applies only when the catalog
+    # misses. The tool never decides which wins — the service does.
+    stated = interval_days if interval_stated_by_person else None
+    estimate: service.Resolution | None = None
+    if interval_days is not None and not interval_stated_by_person:
+        estimate = service.Resolution(
+            interval_days=interval_days,
+            source=IntervalSource.ESTIMATED,
+            note=(interval_note or "").strip() or None,
+            confidence=interval_confidence,
+        )
+
+    routine = service.create(
+        ctx.routines,
+        ctx.events,
+        household_id=ctx.household_id,
+        name=name,
+        owner=known[owner],
+        created_by=ctx.actor,
+        today=today,
+        tz=ctx.tz,
+        stated_interval=stated,
+        estimate=estimate,
+        category=category,
+        anchor=Anchor(anchor) if anchor else None,
+        involves=people,
+        tier=_tier(tier, Tier.PERSONAL),
+        visibility=Visibility(visibility) if visibility else Visibility.ALL,
+        last_done_on=first_done,
+        due_on=_parse_date(due_on, "due_on") if due_on else None,
+    )
+    return _routine_saved(ctx, routine, "create_routine", f"Created. {_interval_note(routine)}")
+
+
+def _update_routine(
+    ctx: ToolContext,
+    routine_id: str,
+    name: str | None,
+    interval_days: int | None,
+    due_on: str | None,
+    paused: bool | None,
+    involves: list[str] | None,
+    tier: str | None,
+    visibility: str | None,
+    category: str | None,
+) -> str:
+    stored = _visible_routine(ctx, routine_id)
+    if visibility is not None:
+        ensure_may_set_visibility(ctx.actor)
+    if not ctx.actor.is_adult and stored.owner_member_id != ctx.actor.member_id:
+        raise Forbidden("Minors may only change their own routines.")
+
+    patch: dict[str, Any] = {
+        "name": name,
+        "interval_days": interval_days,
+        "due_on": due_on,
+        "paused": paused,
+        "involves": involves,
+        "tier": tier,
+        "visibility": visibility,
+        "category": category,
+    }
+    fields = {k: v for k, v in patch.items() if v is not None}
+    if not fields:
+        raise InvalidRequest("Nothing to change.")
+
+    call_id = call_id_for(
+        "update_routine", routine_id, json.dumps(fields, sort_keys=True, default=str)
+    )
+    if call_id in ctx.settled:
+        raise _AlreadySettled(ctx.settled[call_id])
+    if stored.owner_member_id != ctx.actor.member_id:
+        _gate(
+            ctx,
+            tool="update_routine",
+            call_id=call_id,
+            summary=f'Change "{stored.name}"?',
+            event_id=stored.due_event_id,
+            args={"routine_id": routine_id, **fields},
+        )
+
+    today = _today(ctx)
+    if name is not None:
+        if not name.strip():
+            raise InvalidRequest("`name` may not be empty.")
+        stored.name = name.strip()
+    if category is not None:
+        stored.category = category
+    if involves is not None:
+        stored.involves = _check_members(ctx, involves, "involves")
+    if tier is not None:
+        stored.tier = Tier(tier)
+    if visibility is not None:
+        stored.visibility = Visibility(visibility)
+    if paused is not None:
+        stored.paused = paused
+    if interval_days is not None:
+        if interval_days < 1:
+            raise InvalidRequest("`interval_days` must be at least 1.")
+        # Same as PATCH: a number given here is the person's, and sticky.
+        service.apply_interval(
+            stored,
+            service.Resolution(interval_days=interval_days, source=IntervalSource.HUMAN),
+        )
+        if due_on is None:
+            stored.due_on = service.next_due(stored, today=today)
+    if due_on is not None:
+        # A snooze: kept until the next completion.
+        stored.due_on = _parse_date(due_on, "due_on")
+
+    saved = ctx.routines.put(stored)
+    saved = service.reproject(saved, ctx.routines, ctx.events, today=today, tz=ctx.tz)
+    return _routine_saved(ctx, saved, "update_routine", "Updated.")
+
+
+def _delete_routine(ctx: ToolContext, routine_id: str) -> str:
+    call_id = call_id_for("delete_routine", routine_id)
+    # Before the load, as for `_delete_event`: a replayed delete tombstoned it.
+    if call_id in ctx.settled:
+        raise _AlreadySettled(ctx.settled[call_id])
+    stored = _visible_routine(ctx, routine_id)
+    if not ctx.actor.is_adult and (stored.created_by or stored.owner_member_id) != (
+        ctx.actor.member_id
+    ):
+        raise Forbidden("Minors may only delete routines they created.")
+    _gate(
+        ctx,
+        tool="delete_routine",
+        call_id=call_id,
+        summary=f'Delete "{stored.name}" and its reminder?',
+        event_id=stored.due_event_id,
+        args={"routine_id": routine_id},
+    )
+    service.remove(stored, ctx.routines, ctx.events, at=datetime.now(UTC))
+    ctx.outcomes.append(
+        ToolOutcome(
+            tool="delete_routine", status="ok", event_id=stored.due_event_id, detail=routine_id
+        )
+    )
+    return "Deleted."
+
+
+def _undo_completion(ctx: ToolContext, routine_id: str, completion_id: str) -> str:
+    stored = _visible_routine(ctx, routine_id)
+    today = _today(ctx)
+    saved = service.undo_completion(
+        stored, ctx.routines, ctx.events, completion_id=completion_id, today=today, tz=ctx.tz
+    )
+    if saved is None:
+        raise NotFound("No such completion.")
+    return _routine_saved(ctx, saved, "undo_completion", "Completion removed.")
+
+
 # --- the tool surface --------------------------------------------------------
 
 
@@ -779,8 +1094,21 @@ def settle_confirmation(ctx: ToolContext) -> ToolOutcome | None:
             args.get("location"),
             args.get("involves"),
         ),
+        "delete_routine": lambda: _delete_routine(ctx, str(args["routine_id"])),
+        "update_routine": lambda: _update_routine(
+            ctx,
+            str(args["routine_id"]),
+            args.get("name"),
+            args.get("interval_days"),
+            args.get("due_on"),
+            args.get("paused"),
+            args.get("involves"),
+            args.get("tier"),
+            args.get("visibility"),
+            args.get("category"),
+        ),
     }
-    if "event_id" not in args:
+    if "event_id" not in args and "routine_id" not in args:
         # A pending row persisted before args were stored loads back with
         # args={} — nothing safe to replay. Fall back to the legacy path (do
         # not settle), so the model's re-issue can still carry the write.
@@ -1014,18 +1342,192 @@ def build_tools(ctx: ToolContext) -> list[Any]:
         """
         return _safe(ctx, "unmerge", lambda: _unmerge(ctx, group_id))
 
+    @beta_tool
+    def list_routines() -> str:
+        """List the household's routines: things done every so often, with when
+        each was last done and when it is next due.
+
+        Call this before logging that something was done, and to answer "how long
+        since we…" or "when is … due". Each row has a routine id, lastDoneOn,
+        dueOn, status (overdue, due_soon, ok, unscheduled, paused) and
+        daysUntilDue. Results are already limited to what the speaker may see.
+        """
+        return _read(lambda: _list_routines(ctx))
+
+    @beta_tool
+    def log_done(routine_id: str, done_on: str | None = None, note: str | None = None) -> str:
+        """Record that a routine was just done, and move its due date forward.
+
+        Call this when someone says they did an occasional chore — "changed the
+        cabin filter this morning", "got a haircut", "cleaned the gutters".
+        Find the routine id with list_routines first.
+
+        Args:
+            routine_id: The id from list_routines.
+            done_on: The day it was done, like 2026-08-06. Defaults to today;
+                may not be in the future.
+            note: Anything worth remembering, such as the part used or mileage.
+        """
+        return _safe(ctx, "log_done", lambda: _log_done(ctx, routine_id, done_on, note))
+
+    @beta_tool
+    def create_routine(
+        name: str,
+        interval_days: int | None = None,
+        interval_stated_by_person: bool = False,
+        interval_note: str | None = None,
+        interval_confidence: float | None = None,
+        last_done_on: str | None = None,
+        due_on: str | None = None,
+        anchor: AnchorName | None = None,
+        category: str | None = None,
+        owner_member_id: str | None = None,
+        involves: list[str] | None = None,
+        tier: TierName = "T2",
+        visibility: VisibilityName | None = None,
+    ) -> str:
+        """Start tracking something the household does every so often.
+
+        Call this when someone mentions an occasional task that list_routines
+        does not already have. A known catalog of common items supplies the
+        interval when the name matches; a number the person states beats the
+        catalog; your own estimate is used only when both are missing. When you
+        estimate, set interval_stated_by_person to false, give a one-line
+        interval_note, and tell the person the cadence you assumed so they can
+        correct it. Never present an estimate as fact.
+
+        Args:
+            name: What it is, in the household's own words.
+            interval_days: How often, in days. Pass the person's number when
+                they said one; otherwise your estimate, or leave unset.
+            interval_stated_by_person: True only when the person said how often.
+                False when interval_days is your estimate.
+            interval_note: One line on where an estimated interval came from.
+            interval_confidence: Your confidence in an estimate, 0 to 1.
+            last_done_on: When it was last done, like 2026-08-06. Pass today
+                when they are telling you they just did it.
+            due_on: An explicit first due date, if the person named one.
+            anchor: "elapsed" (due N days after last done) or "calendar" (same
+                month and day every year, like holiday lights).
+            category: Free text such as vehicle, home_maintenance, personal_care.
+            owner_member_id: Whose routine it is. Defaults to the speaker.
+            involves: Member ids of other people it involves.
+            tier: T1 household, T2 personal (default), T3 busy.
+            visibility: "adults" hides it from minors. Adults only.
+        """
+        return _safe(
+            ctx,
+            "create_routine",
+            lambda: _create_routine(
+                ctx,
+                name,
+                interval_days,
+                interval_stated_by_person,
+                interval_note,
+                interval_confidence,
+                last_done_on,
+                due_on,
+                anchor,
+                category,
+                owner_member_id,
+                involves,
+                tier,
+                visibility,
+            ),
+        )
+
+    @beta_tool
+    def update_routine(
+        routine_id: str,
+        name: str | None = None,
+        interval_days: int | None = None,
+        due_on: str | None = None,
+        paused: bool | None = None,
+        involves: list[str] | None = None,
+        tier: TierName | None = None,
+        visibility: VisibilityName | None = None,
+        category: str | None = None,
+    ) -> str:
+        """Change a routine. Pass only the fields that change.
+
+        Use due_on to snooze ("remind me next month instead"), interval_days
+        when the person corrects how often, and paused to stop reminders without
+        deleting. Editing a routine that belongs to someone else needs their
+        confirmation and will come back as pending; that is normal.
+
+        Args:
+            routine_id: The id from list_routines.
+            name: New name.
+            interval_days: New interval in days, as stated by the person.
+            due_on: New due date, like 2026-09-01. Kept until it is next done.
+            paused: True to stop reminders, false to resume.
+            involves: Replacement list of member ids this routine involves.
+            tier: T1 household, T2 personal, T3 busy.
+            visibility: "adults" hides it from minors, "all" shows everyone.
+                Adults only.
+            category: New category.
+        """
+        return _safe(
+            ctx,
+            "update_routine",
+            lambda: _update_routine(
+                ctx,
+                routine_id,
+                name,
+                interval_days,
+                due_on,
+                paused,
+                involves,
+                tier,
+                visibility,
+                category,
+            ),
+        )
+
+    @beta_tool
+    def delete_routine(routine_id: str) -> str:
+        """Stop tracking a routine and remove its reminder from the calendar.
+
+        This always needs confirmation and will come back as pending the first
+        time; relay the question and wait. To stop reminders temporarily, use
+        update_routine with paused instead.
+
+        Args:
+            routine_id: The id from list_routines.
+        """
+        return _safe(ctx, "delete_routine", lambda: _delete_routine(ctx, routine_id))
+
+    @beta_tool
+    def undo_completion(routine_id: str, completion_id: str) -> str:
+        """Remove a completion that was logged by mistake ("I didn't actually
+        do that"), rolling the due date back.
+
+        Args:
+            routine_id: The id from list_routines.
+            completion_id: The id log_done returned.
+        """
+        return _safe(
+            ctx, "undo_completion", lambda: _undo_completion(ctx, routine_id, completion_id)
+        )
+
     # Stable order: the tool list renders ahead of the system prompt, so a
     # reshuffle here silently invalidates the whole cached prefix.
     return [
         confirm_event,
         create_event,
+        create_routine,
         delete_event,
+        delete_routine,
         find_conflicts,
         get_agenda,
         list_members,
+        list_routines,
+        log_done,
         merge_events,
         set_tier,
         set_visibility,
+        undo_completion,
         unmerge,
         update_event,
+        update_routine,
     ]

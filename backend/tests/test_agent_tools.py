@@ -29,6 +29,7 @@ from fakes import (
     TZ,
     InMemoryEventRepo,
     InMemoryMemberRepo,
+    InMemoryRoutineRepo,
     make_event,
 )
 
@@ -68,6 +69,7 @@ def harness(
         actor=actor,
         events=repo,
         members=InMemoryMemberRepo(ROSTER),
+        routines=InMemoryRoutineRepo(),
         now=NOW,
         tz=TZ,
         confirm=confirm,

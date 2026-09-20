@@ -24,8 +24,15 @@ from fastapi import Depends, FastAPI, Query, Request, Response
 from fastapi import status as http_status
 
 from airhead.agenda import build_agenda
+from airhead.api import routines as routines_api
 from airhead.api.agent import router as agent_router
-from airhead.api.deps import Actor, Events, HouseholdId, Members, Tz, get_actor
+from airhead.api.authz import (
+    ensure_may_delete,
+    ensure_may_edit,
+    ensure_may_set_visibility,
+    validate_involves,
+)
+from airhead.api.deps import Actor, Events, HouseholdId, Members, Routines, Tz, get_actor
 from airhead.api.errors import (
     BadRequest,
     Conflict,
@@ -57,7 +64,8 @@ from airhead.domain import (
     TierSource,
     Visibility,
 )
-from airhead.repo.base import AgendaQuery, EventRepo, MemberRepo
+from airhead.repo.base import AgendaQuery, EventRepo
+from airhead.routines import service
 
 MAX_SPAN_DAYS = 31
 
@@ -105,24 +113,8 @@ log = _configure_logging()
 
 # --- authorization -----------------------------------------------------------
 #
-# PRD §6.2: a minor cannot change another member's events, change visibility, delete
-# events they did not create, or connect/disconnect sources. All server-side, because
-# the kiosk is a shared screen and the agent is not a trust boundary.
-
-
-def ensure_may_edit(actor: Member, event: Event) -> None:
-    if not actor.is_adult and event.owner_member_id != actor.member_id:
-        raise Forbidden("Minors may only change their own events.")
-
-
-def ensure_may_delete(actor: Member, event: Event) -> None:
-    if not actor.is_adult and (event.created_by or event.owner_member_id) != actor.member_id:
-        raise Forbidden("Minors may only delete events they created.")
-
-
-def ensure_may_set_visibility(actor: Member) -> None:
-    if not actor.is_adult:
-        raise Forbidden("Only adults may set event visibility.")
+# The PRD §6.2 rules live in `airhead.api.authz` (shared with the routines router);
+# they are re-exported here because `airhead.agent.tools` imports them from this module.
 
 
 def ensure_may_mutate_sources(actor: Member) -> None:
@@ -233,6 +225,7 @@ def event_row(event: Event, tz: str) -> EventRowOut:
         status=event.status,
         is_family=len(member_ids) > 1 and event.tier is Tier.HOUSEHOLD,
         occurrence_id=None,
+        routine_id=event.routine_id,
     )
 
 
@@ -252,6 +245,7 @@ app = FastAPI(
 )
 install_error_handlers(app)
 app.include_router(agent_router)
+app.include_router(routines_api.router)
 
 
 @app.middleware("http")
@@ -299,6 +293,7 @@ def get_agenda(
     actor: Actor,
     events: Events,
     members: Members,
+    routines: Routines,
     household_id: HouseholdId,
     tz: Tz,
     start: Annotated[date, Query()],
@@ -311,6 +306,13 @@ def get_agenda(
         raise BadRequest("`end` may not precede `start`.")
     if (end_date - start_date).days + 1 > MAX_SPAN_DAYS:
         raise BadRequest("Agenda span may not exceed 31 days.", code="range_too_large")
+
+    # ROUTINES-CONTRACT ground rule 3: an overdue routine's due event is rolled onto
+    # today before the read, so it never scrolls off the kitchen screen. `reproject`
+    # writes only on drift, so on a settled calendar this is a read-only pass.
+    service.reproject_all(
+        routines, events, household_id=household_id, today=routines_api.household_today(tz), tz=tz
+    )
 
     roster = members.list(household_id)
     requested = tuple(member_id) if member_id else None
@@ -383,6 +385,7 @@ def get_agenda(
                     status=row.status,
                     is_family=row.is_family,
                     occurrence_id=row.occurrence_id,
+                    routine_id=row.routine_id,
                 )
             )
         days.append(AgendaDayOut(date=day.date, rows=rows))
@@ -401,13 +404,6 @@ def _load_visible(events: EventRepo, actor: Member, household_id: str, event_id:
     if stored is None or not scoped_query(actor, household_id).allows(stored):
         raise NotFound("Event not found.")
     return stored
-
-
-def _validate_involves(members: MemberRepo, household_id: str, involves: list[str]) -> list[str]:
-    known = {m.member_id for m in members.list(household_id)}
-    if set(involves) - known:
-        raise InvalidRequest("Unknown member id in `involves`.")
-    return list(dict.fromkeys(involves))
 
 
 @app.post("/api/events", response_model=EventRowOut, status_code=http_status.HTTP_201_CREATED)
@@ -442,7 +438,7 @@ def create_event(
         end_local = body.end_local or datetime.min
         all_day = False
 
-    involves = _validate_involves(members, household_id, body.involves)
+    involves = validate_involves(members, household_id, body.involves)
     if owner not in {m.member_id for m in members.list(household_id)}:
         raise InvalidRequest("Unknown ownerMemberId.")
 
@@ -521,7 +517,7 @@ def patch_event(
     if "rrule" in fields:
         stored.rrule = body.rrule
     if "involves" in fields and body.involves is not None:
-        stored.involves = _validate_involves(members, household_id, body.involves)
+        stored.involves = validate_involves(members, household_id, body.involves)
 
     if "tier" in fields and body.tier is not None:
         # PRD §6.1 rule 5. This stamp is what makes a correction on the kitchen screen

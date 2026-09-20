@@ -42,6 +42,7 @@ class EventRow:
     status: EventStatus
     is_family: bool
     occurrence_id: str | None
+    routine_id: str | None = None  # set on the one due event a routine owns
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,6 +166,7 @@ def _place(
                 visibility=inst.visibility,
                 status=inst.status,
                 is_family=inst.tier is Tier.HOUSEHOLD and len(member_ids) > 1,
+                routine_id=inst.routine_id,
                 occurrence_id=(
                     occurrence_id(inst.event_id, inst.start_utc)
                     if inst.recurrence_parent_id

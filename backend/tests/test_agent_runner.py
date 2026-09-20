@@ -33,6 +33,7 @@ from fakes import (
     TZ,
     InMemoryEventRepo,
     InMemoryMemberRepo,
+    InMemoryRoutineRepo,
     make_event,
 )
 
@@ -160,7 +161,13 @@ def harness(
 ) -> tuple[FakeClient, AgentDeps, InMemoryEventRepo]:
     repo = InMemoryEventRepo(events or [])
     client = FakeClient(*scripts)
-    return client, AgentDeps(events=repo, members=InMemoryMemberRepo(ROSTER), client=client), repo
+    deps = AgentDeps(
+        events=repo,
+        members=InMemoryMemberRepo(ROSTER),
+        routines=InMemoryRoutineRepo(),
+        client=client,
+    )
+    return client, deps, repo
 
 
 def ask(deps: AgentDeps, message: str, *, actor: Any = ALEX, **kw: Any) -> Any:

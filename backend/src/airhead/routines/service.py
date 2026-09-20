@@ -354,14 +354,17 @@ def undo_completion(
     completion_id: str,
     today: date,
     tz: str,
-) -> bool:
-    """Delete one completion and roll the derived state back. False if it did not exist."""
+) -> Routine | None:
+    """Delete one completion and roll the derived state back.
+
+    Returns the recomputed routine, or None when the completion did not exist -
+    the same shape `complete` returns, so callers never need a second `get`.
+    """
     if not routines.delete_completion(routine.household_id, routine.routine_id, completion_id):
-        return False
+        return None
     history = routines.list_completions(routine.household_id, routine.routine_id)
     routine = routines.put(_recompute(routine, history, today=today))
-    reproject(routine, routines, events, today=today, tz=tz)
-    return True
+    return reproject(routine, routines, events, today=today, tz=tz)
 
 
 def create(
@@ -391,6 +394,10 @@ def create(
     only when the deterministic ladder came up empty, so the catalog beats the
     model and the person beats both.
     """
+    # Before the first write: a future completion is rejected inside `complete`,
+    # and rejecting it there would leave an orphan routine row behind.
+    if last_done_on is not None and last_done_on > today:
+        raise FutureCompletion("A routine cannot be completed in the future.")
     resolution = resolve_interval(name, stated=stated_interval)
     if resolution.interval_days is None and estimate is not None:
         resolution = estimate

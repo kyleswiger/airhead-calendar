@@ -8,11 +8,17 @@ import boto3
 import pytest
 from moto import mock_aws
 
-from airhead.repo.base import EventRepo, MemberRepo, SourceRepo
-from airhead.repo.dynamo import DynamoEventRepo, DynamoMemberRepo, DynamoSourceRepo
+from airhead.repo.base import EventRepo, MemberRepo, RoutineRepo, SourceRepo
+from airhead.repo.dynamo import (
+    DynamoEventRepo,
+    DynamoMemberRepo,
+    DynamoRoutineRepo,
+    DynamoSourceRepo,
+)
 from airhead.repo.sqlite import (
     SqliteEventRepo,
     SqliteMemberRepo,
+    SqliteRoutineRepo,
     SqliteSourceRepo,
     connect,
 )
@@ -23,11 +29,12 @@ TEST_REGION = "us-east-1"
 
 @dataclass(frozen=True)
 class Repos:
-    """One backend's three repositories, plus a factory for the pagination test."""
+    """One backend's four repositories, plus a factory for the pagination test."""
 
     events: EventRepo
     members: MemberRepo
     sources: SourceRepo
+    routines: RoutineRepo
     backend: str
     new_event_repo: Callable[..., EventRepo]
 
@@ -101,6 +108,7 @@ def repos(request: pytest.FixtureRequest) -> Iterator[Repos]:
             events=SqliteEventRepo(conn),
             members=SqliteMemberRepo(conn),
             sources=SqliteSourceRepo(conn),
+            routines=SqliteRoutineRepo(conn),
             backend="sqlite",
             new_event_repo=lambda **kw: SqliteEventRepo(conn, **kw),
         )
@@ -111,6 +119,7 @@ def repos(request: pytest.FixtureRequest) -> Iterator[Repos]:
             events=DynamoEventRepo(TEST_TABLE, resource=resource),
             members=DynamoMemberRepo(TEST_TABLE, resource=resource),
             sources=DynamoSourceRepo(TEST_TABLE, resource=resource),
+            routines=DynamoRoutineRepo(TEST_TABLE, resource=resource),
             backend="dynamo",
             new_event_repo=lambda **kw: DynamoEventRepo(TEST_TABLE, resource=resource, **kw),
         )

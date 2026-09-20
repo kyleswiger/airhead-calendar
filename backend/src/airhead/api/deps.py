@@ -10,6 +10,7 @@ on every invocation, and pytest would need AWS credentials just to import the ap
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Annotated, Any
@@ -160,11 +161,13 @@ def get_agent_deps(
     runner: Annotated[Any, Depends(get_runner)],
     events: Annotated[EventRepo, Depends(get_event_repo)],
     members: Annotated[MemberRepo, Depends(get_member_repo)],
+    routines: Annotated[RoutineRepo, Depends(get_routine_repo)],
 ) -> Any:
     settings = get_settings()
     return runner.AgentDeps(
         events=events,
         members=members,
+        routines=routines,
         client=_anthropic_client(),
         model=settings.agent_model,
         effort=settings.agent_effort,
@@ -202,3 +205,24 @@ Runner = Annotated[Any, Depends(get_runner)]
 AgentRuntime = Annotated[Any, Depends(get_agent_deps)]
 HouseholdId = Annotated[str, Depends(get_household_id)]
 Tz = Annotated[str, Depends(get_tz)]
+
+
+def get_estimator() -> Callable[[str, str | None], Any]:
+    """`POST /api/routines/estimate`'s model step, as a `(name, context) -> Resolution`.
+
+    A callable rather than a client so the tests fake the whole step. The Bedrock
+    client is built lazily *inside* the callable: a catalog hit never invokes it, and
+    resolving this dependency must stay free of boto3 for that path.
+    """
+
+    def estimate(name: str, context: str | None) -> Any:
+        from airhead.routines.estimate import estimate_interval
+
+        return estimate_interval(
+            _anthropic_client(), model=get_settings().agent_model, name=name, context=context
+        )
+
+    return estimate
+
+
+Estimator = Annotated[Callable[[str, str | None], Any], Depends(get_estimator)]
