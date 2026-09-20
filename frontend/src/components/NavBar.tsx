@@ -9,14 +9,17 @@ interface NavBarProps {
   isTomorrow: boolean;
   /** The chat panel is open, for the ⌨ button's expanded state. */
   chatOpen: boolean;
+  routinesOpen: boolean;
   onPrev: () => void;
   onNext: () => void;
   onToday: () => void;
   onTomorrow: () => void;
   onWeek: () => void;
   onChat: () => void;
+  onRoutines: () => void;
   /** So focus can come back here when the panel closes. */
   chatRef?: RefObject<HTMLButtonElement | null>;
+  routinesRef?: RefObject<HTMLButtonElement | null>;
 }
 
 /**
@@ -29,13 +32,16 @@ export function NavBar({
   isToday,
   isTomorrow,
   chatOpen,
+  routinesOpen,
   onPrev,
   onNext,
   onToday,
   onTomorrow,
   onWeek,
   onChat,
+  onRoutines,
   chatRef,
+  routinesRef,
 }: NavBarProps) {
   const dayView = view === "day";
 
@@ -69,6 +75,18 @@ export function NavBar({
           onClick={onWeek}
         >
           Week
+        </button>
+        {/* The way in to the routines list (ROUTINES-CONTRACT § Display). Same
+            size as the view buttons; expanded state, not colour, says it's open. */}
+        <button
+          type="button"
+          className="nav__btn nav__btn--routines"
+          ref={routinesRef ?? null}
+          onClick={onRoutines}
+          aria-expanded={routinesOpen}
+          aria-haspopup="dialog"
+        >
+          Routines
         </button>
       </div>
 

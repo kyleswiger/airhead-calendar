@@ -17,8 +17,40 @@ import agendaFixture from "./fixtures/agenda.sample.json";
 import eventsFixture from "./fixtures/events.sample.json";
 import { rebaseAgenda, shiftRow } from "./lib/agenda";
 import { daysBetween, todayIsoDate } from "./lib/format";
-import { isRecord, parseAgenda, parseAgentTurn, parseApiError, parseRow } from "./lib/parse";
-import type { AgendaResponse, AgentTurnRequest, AgentTurnResponse, EventRow } from "./types";
+import {
+  fixtureCompleteRoutine,
+  fixtureCreateRoutine,
+  fixtureDeleteRoutine,
+  fixtureDueEvents,
+  fixtureEstimate,
+  fixtureListCompletions,
+  fixtureListRoutines,
+  fixturePatchRoutine,
+  fixtureUndoCompletion,
+} from "./lib/fixtureRoutines";
+import {
+  isRecord,
+  parseAgenda,
+  parseAgentTurn,
+  parseApiError,
+  parseCompletions,
+  parseEstimate,
+  parseRoutineEnvelope,
+  parseRoutines,
+  parseRow,
+} from "./lib/parse";
+import type {
+  AgendaResponse,
+  AgentTurnRequest,
+  AgentTurnResponse,
+  Completion,
+  CompleteRoutineBody,
+  CreateRoutineBody,
+  EstimateResponse,
+  EventRow,
+  Routine,
+  RoutinePatch,
+} from "./types";
 import { isEventRow } from "./types";
 
 // Narrowed off Vite's `any`-typed index signature so nothing downstream is `any`.
@@ -89,14 +121,29 @@ async function request(path: string, signal?: AbortSignal): Promise<unknown> {
   return unwrap(await fetch(`${baseUrl()}${path}`, init));
 }
 
-async function postJson(path: string, payload: unknown, signal?: AbortSignal): Promise<unknown> {
+async function sendJson(
+  method: "POST" | "PATCH",
+  path: string,
+  payload: unknown,
+  signal?: AbortSignal,
+): Promise<unknown> {
   const init: RequestInit = {
-    method: "POST",
+    method,
     headers: { ...headers(), "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   };
   if (signal !== undefined) init.signal = signal;
   return unwrap(await fetch(`${baseUrl()}${path}`, init));
+}
+
+async function postJson(path: string, payload: unknown, signal?: AbortSignal): Promise<unknown> {
+  return sendJson("POST", path, payload, signal);
+}
+
+async function deleteRequest(path: string, signal?: AbortSignal): Promise<void> {
+  const init: RequestInit = { method: "DELETE", headers: headers() };
+  if (signal !== undefined) init.signal = signal;
+  await unwrap(await fetch(`${baseUrl()}${path}`, init));
 }
 
 // --- fixture mode ----------------------------------------------------------
@@ -106,8 +153,25 @@ const FIXTURE_AGENDA: AgendaResponse = parseAgenda(agendaFixture as unknown);
 /** Days the whole fixture is shifted by so day one lands on today. */
 const FIXTURE_DELTA = daysBetween(FIXTURE_AGENDA.range.start, todayIsoDate());
 
+/**
+ * The rebased sample plus the routines' due events, exactly as the real
+ * `GET /api/agenda` would carry them after `reproject`. Days the sample lacks
+ * are created so an overdue row rolled forward to today always shows.
+ */
 function fixtureAgenda(): AgendaResponse {
-  return rebaseAgenda(FIXTURE_AGENDA, todayIsoDate());
+  const today = todayIsoDate();
+  const agenda = rebaseAgenda(FIXTURE_AGENDA, today);
+  const days = agenda.days.map((day) => ({ ...day, rows: [...day.rows] }));
+  for (const due of fixtureDueEvents(today)) {
+    let day = days.find((d) => d.date === due.startLocal);
+    if (day === undefined) {
+      day = { date: due.startLocal, rows: [] };
+      days.push(day);
+    }
+    day.rows.push(due);
+  }
+  days.sort((a, b) => a.date.localeCompare(b.date));
+  return { ...agenda, days };
 }
 
 function fixtureEvents(): ReadonlyMap<string, EventRow> {
@@ -186,4 +250,87 @@ export async function postAgentTurn(
   signal?: AbortSignal,
 ): Promise<AgentTurnResponse> {
   return parseAgentTurn(await postJson("/api/agent/turn", body, signal));
+}
+
+/* ------------------------------------------------------------ routines -- */
+
+/**
+ * `docs/ROUTINES-CONTRACT.md` § HTTP. Every date on the wire is a bare
+ * household-local `YYYY-MM-DD`; the display never derives one. In fixture mode
+ * `lib/fixtureRoutines.ts` plays the server so the demo is interactive.
+ */
+
+const ROUTINES = "/api/routines";
+
+function routinePath(id: string, suffix = ""): string {
+  return `${ROUTINES}/${encodeURIComponent(id)}${suffix}`;
+}
+
+export async function listRoutines(signal?: AbortSignal): Promise<Routine[]> {
+  if (usingFixture) return fixtureListRoutines();
+  return parseRoutines(await request(ROUTINES, signal));
+}
+
+export async function createRoutine(body: CreateRoutineBody, signal?: AbortSignal): Promise<Routine> {
+  if (usingFixture) return fixtureCreateRoutine(body);
+  return parseRoutineEnvelope(await postJson(ROUTINES, body, signal));
+}
+
+/** Returns the updated *routine*, not the completion (contract). */
+export async function completeRoutine(
+  id: string,
+  body: CompleteRoutineBody = {},
+  signal?: AbortSignal,
+): Promise<Routine> {
+  if (usingFixture) {
+    const routine = fixtureCompleteRoutine(id, body.doneOn, body.note, MEMBER_ID);
+    if (routine === null) throw new ApiError("Routine not found", "not_found", 404);
+    return routine;
+  }
+  return parseRoutineEnvelope(await postJson(routinePath(id, "/complete"), body, signal));
+}
+
+/** Ordered by doneOn, then id - so the last entry is the newest. */
+export async function listCompletions(id: string, signal?: AbortSignal): Promise<Completion[]> {
+  if (usingFixture) return fixtureListCompletions(id);
+  return parseCompletions(await request(routinePath(id, "/completions"), signal));
+}
+
+export async function undoCompletion(id: string, completionId: string, signal?: AbortSignal): Promise<void> {
+  if (usingFixture) {
+    if (!fixtureUndoCompletion(id, completionId)) {
+      throw new ApiError("Completion not found", "not_found", 404);
+    }
+    return;
+  }
+  await deleteRequest(routinePath(id, `/completions/${encodeURIComponent(completionId)}`), signal);
+}
+
+export async function patchRoutine(id: string, patch: RoutinePatch, signal?: AbortSignal): Promise<Routine> {
+  if (usingFixture) {
+    const routine = fixturePatchRoutine(id, patch);
+    if (routine === null) throw new ApiError("Routine not found", "not_found", 404);
+    return routine;
+  }
+  return parseRoutineEnvelope(await sendJson("PATCH", routinePath(id), patch, signal));
+}
+
+export async function deleteRoutine(id: string, signal?: AbortSignal): Promise<void> {
+  if (usingFixture) {
+    fixtureDeleteRoutine(id);
+    return;
+  }
+  await deleteRequest(routinePath(id), signal);
+}
+
+/** Writes nothing. A catalog hit costs no model call. */
+export async function estimateRoutine(
+  name: string,
+  context?: string,
+  signal?: AbortSignal,
+): Promise<EstimateResponse> {
+  if (usingFixture) return fixtureEstimate(name, context);
+  const body: { name: string; context?: string } = { name };
+  if (context !== undefined && context.length > 0) body.context = context;
+  return parseEstimate(await postJson(`${ROUTINES}/estimate`, body, signal));
 }

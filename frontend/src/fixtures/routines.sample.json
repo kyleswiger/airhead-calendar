@@ -1,0 +1,124 @@
+{
+  "asOf": "2026-09-20",
+  "routines": [
+    {
+      "routineId": "rtn_haircut",
+      "name": "Haircut",
+      "category": "personal_care",
+      "ownerMemberId": "mem_riley",
+      "memberIds": ["mem_riley"],
+      "tier": "T2",
+      "visibility": "all",
+      "intervalDays": 35,
+      "intervalSource": "human",
+      "intervalNote": null,
+      "intervalConfidence": null,
+      "anchor": "elapsed",
+      "catalogKey": null,
+      "lastDoneOn": "2026-08-04",
+      "completions": [
+        { "completionId": "cmp_hc1", "doneOn": "2026-06-30", "byMemberId": "mem_sam" },
+        { "completionId": "cmp_hc2", "doneOn": "2026-08-04", "byMemberId": "mem_sam" }
+      ],
+      "paused": false
+    },
+    {
+      "routineId": "rtn_hvac",
+      "name": "HVAC filter",
+      "category": "home",
+      "ownerMemberId": "mem_alex",
+      "memberIds": ["mem_alex", "mem_sam"],
+      "tier": "T1",
+      "visibility": "all",
+      "intervalDays": 90,
+      "intervalSource": "catalog",
+      "intervalNote": "Most 1\" furnace filters are rated for 90 days; sooner with pets.",
+      "intervalConfidence": null,
+      "anchor": "elapsed",
+      "catalogKey": "hvac_filter",
+      "lastDoneOn": "2026-06-25",
+      "completions": [
+        { "completionId": "cmp_hv1", "doneOn": "2026-06-25", "byMemberId": "mem_alex", "note": "Filtrete 1500" }
+      ],
+      "paused": false
+    },
+    {
+      "routineId": "rtn_cabin",
+      "name": "Cabin air filter — EV6",
+      "category": "vehicle",
+      "ownerMemberId": "mem_alex",
+      "memberIds": ["mem_alex"],
+      "tier": "T2",
+      "visibility": "all",
+      "intervalDays": 365,
+      "intervalSource": "catalog",
+      "intervalNote": "Kia schedules the cabin filter at 12 months / 15,000 mi.",
+      "intervalConfidence": null,
+      "anchor": "elapsed",
+      "catalogKey": "cabin_air_filter",
+      "lastDoneOn": "2026-05-12",
+      "completions": [
+        { "completionId": "cmp_cb1", "doneOn": "2026-05-12", "byMemberId": "mem_alex", "note": "Bosch filter, 41,200 mi" }
+      ],
+      "paused": false
+    },
+    {
+      "routineId": "rtn_gutters",
+      "name": "Clean the gutters",
+      "category": "home",
+      "ownerMemberId": "mem_sam",
+      "memberIds": ["mem_sam"],
+      "tier": "T2",
+      "visibility": "all",
+      "intervalDays": 180,
+      "intervalSource": "estimated",
+      "intervalNote": "Twice a year is typical for a house under mature trees; once if there are none nearby.",
+      "intervalConfidence": 0.6,
+      "anchor": "elapsed",
+      "catalogKey": null,
+      "lastDoneOn": "2026-04-18",
+      "completions": [
+        { "completionId": "cmp_gt1", "doneOn": "2026-04-18", "byMemberId": "mem_sam" }
+      ],
+      "paused": false
+    },
+    {
+      "routineId": "rtn_sourdough",
+      "name": "Feed the sourdough starter",
+      "category": "kitchen",
+      "ownerMemberId": "mem_sam",
+      "memberIds": ["mem_sam"],
+      "tier": "T2",
+      "visibility": "all",
+      "intervalDays": null,
+      "intervalSource": null,
+      "intervalNote": null,
+      "intervalConfidence": null,
+      "anchor": "elapsed",
+      "catalogKey": null,
+      "lastDoneOn": null,
+      "completions": [],
+      "paused": false
+    },
+    {
+      "routineId": "rtn_lights",
+      "name": "Holiday lights up",
+      "category": "seasonal",
+      "ownerMemberId": "mem_alex",
+      "memberIds": ["mem_alex", "mem_riley"],
+      "tier": "T1",
+      "visibility": "all",
+      "intervalDays": 365,
+      "intervalSource": "human",
+      "intervalNote": null,
+      "intervalConfidence": null,
+      "anchor": "calendar",
+      "catalogKey": null,
+      "lastDoneOn": "2025-11-29",
+      "completions": [
+        { "completionId": "cmp_hl1", "doneOn": "2025-11-29", "byMemberId": "mem_alex" }
+      ],
+      "paused": true
+    }
+  ]
+}

@@ -971,3 +971,450 @@ button {
 .gate__btn--danger:hover {
   background: rgba(247, 118, 142, 0.14);
 }
+
+/* ---------------------------------------------------------- due rows -- */
+
+/* A routine's projected due date. Filled with the warn tone *and* labelled
+   "DUE", so it reads at kitchen distance and without colour. */
+.chip--due {
+  background: var(--warn);
+  color: var(--bg);
+}
+
+/* The one agenda row that is also a control: a <button> laid out as the grid
+   row, so the whole row is the finger target. */
+button.row--due {
+  width: 100%;
+  text-align: left;
+  border-radius: 0.5rem;
+  transition: background 120ms ease;
+}
+
+button.row--due:hover,
+button.row--due:focus-visible {
+  background: var(--surface);
+}
+
+.row__hint {
+  color: var(--warn);
+}
+
+/* ------------------------------------------------------------ nav: routines -- */
+
+.nav__btn--routines {
+  border: 1px solid var(--line);
+  color: var(--fg);
+}
+
+.nav__btn--routines[aria-expanded="true"] {
+  background: var(--fg);
+  color: var(--bg);
+  font-weight: 700;
+}
+
+/* ------------------------------------------------------- routines panel -- */
+
+/* Shares the chat panel's shell (fixed right third, scrim, head). Its own
+   body scrolls; the Add form rides at the bottom of the list. */
+.routines__sub {
+  font-size: var(--fs-min);
+  line-height: 1.35;
+  color: var(--muted);
+}
+
+.routines__body {
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 1.5rem 1.75rem 1.75rem;
+}
+
+.routines__note {
+  font-size: var(--fs-body);
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.routines__error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: var(--fs-min);
+  line-height: 1.35;
+  padding: 0.75rem 1rem;
+  border-left: 4px solid var(--danger);
+  background: var(--surface-hi);
+  border-radius: 0.5rem;
+}
+
+.routines__link {
+  flex: none;
+  min-height: 4.5rem;
+  padding: 0 1.25rem;
+  font-size: var(--fs-min);
+  color: var(--muted);
+  text-decoration: underline;
+}
+
+/* The receipt plus its ten-second regret button. Loud enough to notice,
+   quiet enough not to look like the next thing to do. */
+.routines__undo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: var(--fs-min);
+  color: var(--ok);
+  padding: 0.75rem 1rem;
+  border-left: 4px solid var(--ok);
+  background: var(--surface-hi);
+  border-radius: 0.5rem;
+}
+
+.routines__undo-btn {
+  flex: none;
+  min-height: 4.5rem;
+  min-width: 8rem;
+  padding: 0 1.5rem;
+  border: 1px solid var(--fg);
+  border-radius: 0.6rem;
+  font-size: var(--fs-min);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.routines__undo-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.rtn-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+
+/* One routine: [tappable summary] [Done today], detail underneath when open. */
+.rtn {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem 1.25rem;
+  align-items: center;
+  padding: 0.85rem 0;
+  border-bottom: 1px solid var(--line);
+  border-left: 6px solid transparent;
+  padding-left: 0.75rem;
+}
+
+/* Overdue is the loud one: a danger rail, a tinted surface, and the chip.
+   Three signals, none of them colour alone. */
+.rtn--overdue {
+  border-left-color: var(--danger);
+  background: rgba(247, 118, 142, 0.08);
+}
+
+.rtn--due-soon {
+  border-left-color: var(--warn);
+}
+
+.rtn--paused,
+.rtn--unscheduled {
+  color: var(--muted);
+}
+
+.rtn__main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 0;
+  min-height: 4.5rem;
+  text-align: left;
+  border-radius: 0.5rem;
+  padding: 0.25rem 0.5rem 0.25rem 0;
+}
+
+.rtn__main[aria-expanded="true"] .rtn__name {
+  text-decoration: underline;
+  text-decoration-color: var(--muted);
+  text-underline-offset: 0.2em;
+}
+
+.rtn__headline {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.rtn__name {
+  font-size: var(--fs-title);
+  font-weight: 500;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.rtn--paused .rtn__name,
+.rtn--unscheduled .rtn__name {
+  font-weight: 400;
+}
+
+.rtn__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 1.25rem;
+  min-width: 0;
+}
+
+.rtn__who {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.rtn__when {
+  font-size: var(--fs-min);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.rtn--overdue .rtn__when {
+  color: var(--fg);
+}
+
+.rtn__done {
+  flex: none;
+  min-height: 5.5rem;
+  min-width: 12rem;
+  padding: 0 1.75rem;
+  border-radius: 0.6rem;
+  font-size: var(--fs-body);
+  font-weight: 600;
+  background: var(--fg);
+  color: var(--bg);
+  transition: opacity 120ms ease;
+}
+
+.rtn__done:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.rtn__done[aria-busy="true"] {
+  opacity: 0.7;
+}
+
+.rtn__detail {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.25rem 0 0.5rem;
+}
+
+.rtn__note {
+  font-size: var(--fs-min);
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.rtn__actions {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.rtn__action {
+  min-height: 4.5rem;
+  min-width: 10rem;
+  padding: 0 1.5rem;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  font-size: var(--fs-min);
+  font-weight: 500;
+  color: var(--fg);
+}
+
+.rtn__action:hover {
+  background: var(--surface-hi);
+}
+
+.rtn__action:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.rtn__action--danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+/* Status chips: filled for the loud states, outlined for the quiet ones. */
+.chip--overdue {
+  background: var(--danger);
+  color: var(--bg);
+}
+
+.chip--due-soon {
+  background: var(--warn);
+  color: var(--bg);
+}
+
+.chip--paused,
+.chip--unscheduled,
+.chip--catalog {
+  background: transparent;
+  color: var(--muted);
+  border: 2px solid var(--line);
+}
+
+/* An estimate is an honest guess, so it is drawn as one: dashed, lower-case. */
+.chip--est {
+  background: transparent;
+  color: var(--warn);
+  border: 2px dashed currentColor;
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+
+/* ------------------------------------------------------------- add form -- */
+
+.rtn-add__open {
+  min-height: 5.5rem;
+  border: 2px dashed var(--line);
+  border-radius: 0.6rem;
+  font-size: var(--fs-body);
+  font-weight: 500;
+  color: var(--fg);
+  transition: background 120ms ease;
+}
+
+.rtn-add__open:hover {
+  background: var(--surface-hi);
+}
+
+.rtn-add {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  background: var(--surface-hi);
+}
+
+.rtn-add__row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.rtn-add__label {
+  font-size: var(--fs-min);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.rtn-add__input {
+  min-height: 4.5rem;
+  font: inherit;
+  font-size: var(--fs-body);
+  padding: 0 1rem;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  min-width: 0;
+}
+
+.rtn-add__input::placeholder {
+  color: var(--muted);
+}
+
+.rtn-add__input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.rtn-add__input--num {
+  width: 9rem;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.rtn-add__input--date {
+  color-scheme: dark;
+}
+
+.rtn-add__unit {
+  font-size: var(--fs-min);
+  color: var(--muted);
+}
+
+.rtn-add__suggest {
+  margin-left: auto;
+  min-height: 4.5rem;
+  min-width: 10rem;
+  padding: 0 1.5rem;
+  border: 1px solid var(--fg);
+  border-radius: 0.6rem;
+  font-size: var(--fs-min);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.rtn-add__suggest:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.rtn-add__estimate {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-left: 4px solid var(--warn);
+  background: var(--bg);
+  border-radius: 0.5rem;
+}
+
+.rtn-add__rationale {
+  font-size: var(--fs-min);
+  line-height: 1.4;
+}
+
+/* The one thing the model wants to know. Stated as a question, not a demand. */
+.rtn-add__followup {
+  font-size: var(--fs-min);
+  line-height: 1.4;
+  color: var(--warn);
+}
+
+.rtn-add__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 1rem;
+}
+
+.rtn-add__save {
+  min-height: 4.5rem;
+  min-width: 10rem;
+  padding: 0 2rem;
+  border-radius: 0.6rem;
+  font-size: var(--fs-body);
+  font-weight: 600;
+  background: var(--fg);
+  color: var(--bg);
+}
+
+.rtn-add__save:disabled {
+  background: var(--surface);
+  color: var(--muted);
+  cursor: default;
+}

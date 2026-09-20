@@ -73,8 +73,15 @@ export function WeekView({ days, members, today }: WeekViewProps) {
                   className={`week__event week__event--${event.tier.toLowerCase()}`}
                   style={{ borderLeftColor: safeColor(members.get(event.ownerMemberId)?.color) }}
                 >
+                  {/* A routine's due date reads "Due" in place of "All day". Tap-to-
+                      complete lives in the day view; a week column has no room
+                      for a finger-sized target that isn't the whole cell. */}
                   <span className="week__event-when">
-                    {event.allDay ? "All day" : formatTime(event.startLocal)}
+                    {event.routineId !== undefined
+                      ? "Due"
+                      : event.allDay
+                        ? "All day"
+                        : formatTime(event.startLocal)}
                   </span>
                   <span className="week__event-title">{event.title}</span>
                   {/* `memberIds` is already roster-ordered, so the names come

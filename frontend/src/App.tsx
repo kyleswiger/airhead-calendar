@@ -5,11 +5,13 @@ import { ChatPanel } from "./components/ChatPanel";
 import { DayView } from "./components/DayView";
 import { DisplayHeader } from "./components/DisplayHeader";
 import { NavBar, type ViewMode } from "./components/NavBar";
+import { RoutinesPanel } from "./components/RoutinesPanel";
 import { StatusNote } from "./components/StatusNote";
 import { WeekView } from "./components/WeekView";
 import { useAgenda } from "./hooks/useAgenda";
 import { useAgentChat } from "./hooks/useAgentChat";
 import { useNow } from "./hooks/useNow";
+import { useRoutines } from "./hooks/useRoutines";
 import { daySpan, findDay, indexMembers } from "./lib/agenda";
 import { addDays, daysBetween, formatMonthDay, todayIsoDate } from "./lib/format";
 
@@ -21,8 +23,12 @@ export function App() {
 
   const [view, setView] = useState<ViewMode>("day");
   const [selected, setSelected] = useState(today);
-  const [chatOpen, setChatOpen] = useState(false);
+  // At most one panel is up: chat or routines, never both over the calendar.
+  const [panel, setPanel] = useState<"chat" | "routines" | null>(null);
+  const chatOpen = panel === "chat";
+  const routinesOpen = panel === "routines";
   const chatButton = useRef<HTMLButtonElement>(null);
+  const routinesButton = useRef<HTMLButtonElement>(null);
 
   // One request covers every view: the day, tomorrow and the week are all
   // slices of the same window, so tapping between them is instant and the
@@ -42,10 +48,23 @@ export function App() {
   // here rather than inside the panel so a turn survives the panel closing.
   const chat = useAgentChat({ tz: data?.range.tz ?? "", onWrite: reload });
 
+  // A completion moves the due event, so the agenda is re-fetched alongside
+  // the routine list (the hook reloads its own list; `onWrite` is the agenda).
+  const routines = useRoutines({ onWrite: reload });
+  const completeRoutine = routines.complete;
+  const completeFromAgenda = useCallback(
+    (routineId: string) => void completeRoutine(routineId),
+    [completeRoutine],
+  );
+
   const closeChat = useCallback(() => {
-    setChatOpen(false);
+    setPanel(null);
     // Focus goes back to the button that opened the panel, never to <body>.
     chatButton.current?.focus();
+  }, []);
+  const closeRoutines = useCallback(() => {
+    setPanel(null);
+    routinesButton.current?.focus();
   }, []);
   const weekDays = useMemo(
     () => (data === null ? [] : daySpan(data, windowStart, WEEK_DAYS)),
@@ -96,7 +115,11 @@ export function App() {
         ) : view === "week" ? (
           <WeekView days={weekDays} members={members} today={today} />
         ) : (
-          <DayView day={findDay(data, selected) ?? { date: selected, rows: [] }} members={members} />
+          <DayView
+            day={findDay(data, selected) ?? { date: selected, rows: [] }}
+            members={members}
+            onCompleteRoutine={completeFromAgenda}
+          />
         )}
       </div>
 
@@ -105,8 +128,11 @@ export function App() {
         isToday={isToday}
         isTomorrow={isTomorrow}
         chatOpen={chatOpen}
+        routinesOpen={routinesOpen}
         chatRef={chatButton}
-        onChat={() => setChatOpen(true)}
+        routinesRef={routinesButton}
+        onChat={() => setPanel("chat")}
+        onRoutines={() => setPanel("routines")}
         onPrev={() => step(-1)}
         onNext={() => step(1)}
         onToday={() => {
@@ -127,6 +153,10 @@ export function App() {
           actorId={actingMemberId}
           onClose={closeChat}
         />
+      ) : null}
+
+      {routinesOpen ? (
+        <RoutinesPanel routines={routines} members={members} today={today} onClose={closeRoutines} />
       ) : null}
     </main>
   );

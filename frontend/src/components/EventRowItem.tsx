@@ -9,6 +9,11 @@ interface EventRowItemProps {
   members: MemberIndex;
   /** The day this row is being rendered under, `YYYY-MM-DD`. */
   onDate: string;
+  /**
+   * Present when tapping a routine's due row should mark it done today. Only
+   * rows carrying `routineId` use it; every other row stays inert.
+   */
+  onCompleteRoutine?: (routineId: string) => void;
 }
 
 /**
@@ -18,7 +23,7 @@ interface EventRowItemProps {
  * commitment that just doesn't obligate anyone else (PRD §6.1). T3 never
  * reaches this component; it arrives as a `busy` band instead.
  */
-export function EventRowItem({ event, members, onDate }: EventRowItemProps) {
+export function EventRowItem({ event, members, onDate, onCompleteRoutine }: EventRowItemProps) {
   const owner = members.get(event.ownerMemberId);
   const accent = safeColor(owner?.color);
   const involved = event.memberIds.length > 0 ? event.memberIds : [event.ownerMemberId];
@@ -35,9 +40,23 @@ export function EventRowItem({ event, members, onDate }: EventRowItemProps) {
     !event.allDay && endLocal !== undefined && event.startLocal.slice(0, 10) < onDate;
   const endsAfter = endLocal !== undefined && endLocal.slice(0, 10) > onDate;
 
+  // A routine's due event is the one row that is also a control: one tap
+  // records "done today" (undoable from the Routines panel). The button
+  // *is* the grid row so the finger target is the whole row, not a corner.
+  const routineId = event.routineId;
+  const tappable = routineId !== undefined && onCompleteRoutine !== undefined;
+  const Tag = tappable ? "button" : "div";
+
   return (
-    <div
-      className={`row row--event row--${event.tier.toLowerCase()}`}
+    <Tag
+      {...(tappable
+        ? {
+            type: "button" as const,
+            onClick: () => onCompleteRoutine(routineId),
+            "aria-label": `${event.title} is due. Mark it done today`,
+          }
+        : {})}
+      className={`row row--event row--${event.tier.toLowerCase()}${routineId !== undefined ? " row--due" : ""}`}
       style={{ borderLeftColor: accent }}
     >
       <div className="row__member">
@@ -91,6 +110,8 @@ export function EventRowItem({ event, members, onDate }: EventRowItemProps) {
             <span className="chip chip--proposed">Proposed</span>
           ) : null}
           {event.isFamily ? <span className="chip chip--family">Family</span> : null}
+          {/* A routine's projected due date (ROUTINES-CONTRACT § Display). */}
+          {routineId !== undefined ? <span className="chip chip--due">Due</span> : null}
           <span className="row__title">{event.title}</span>
         </div>
         {others.length > 0 || event.location !== undefined ? (
@@ -111,7 +132,8 @@ export function EventRowItem({ event, members, onDate }: EventRowItemProps) {
             ) : null}
           </div>
         ) : null}
+        {tappable ? <div className="row__meta row__hint">Tap to mark done today</div> : null}
       </div>
-    </div>
+    </Tag>
   );
 }
