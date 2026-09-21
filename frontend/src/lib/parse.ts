@@ -17,11 +17,17 @@ import type {
   AgentTurnResponse,
   AgentUsage,
   BusyRow,
+  Completion,
+  EstimateResponse,
   EventRow,
   EventStatus,
+  IntervalSource,
   Member,
   MemberRole,
   PendingConfirmation,
+  Routine,
+  RoutineAnchor,
+  RoutineStatus,
   Tier,
   TierSource,
   TimedEventRow,
@@ -107,13 +113,15 @@ function parseEventRow(value: Record<string, unknown>): EventRow | null {
     status: asOneOf(value["status"], STATUSES, "confirmed"),
   };
 
-  const optional: Pick<EventRow, "location" | "occurrenceId" | "startUtc"> = {};
+  const optional: Pick<EventRow, "location" | "occurrenceId" | "startUtc" | "routineId"> = {};
   const location = asString(value["location"]);
   if (location !== undefined) optional.location = location;
   const occurrenceId = asString(value["occurrenceId"]);
   if (occurrenceId !== undefined) optional.occurrenceId = occurrenceId;
   const startUtc = asString(value["startUtc"]);
   if (startUtc !== undefined) optional.startUtc = startUtc;
+  const routineId = asString(value["routineId"]);
+  if (routineId !== undefined) optional.routineId = routineId;
 
   if (asBoolean(value["allDay"], false)) {
     // Bare dates, and `endLocal` is the INCLUSIVE last covered day. A one-day
@@ -262,6 +270,149 @@ export function parseAgentTurn(value: unknown): AgentTurnResponse {
   const usage = parseUsage(value["usage"]);
   if (usage !== null) out.usage = usage;
   return out;
+}
+
+/* ------------------------------------------------------------ routines -- */
+
+const ROUTINE_STATUSES: readonly RoutineStatus[] = [
+  "paused",
+  "unscheduled",
+  "overdue",
+  "due_soon",
+  "ok",
+];
+const INTERVAL_SOURCES: readonly IntervalSource[] = ["human", "observed", "catalog", "estimated"];
+const ANCHORS: readonly RoutineAnchor[] = ["elapsed", "calendar"];
+
+/** A finite integer, positive or negative; null for anything else. */
+function asInt(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : null;
+}
+
+function asUnit(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1
+    ? value
+    : null;
+}
+
+function asBareDate(value: unknown): string | null {
+  const s = asString(value);
+  return s === undefined ? null : bareDate(s);
+}
+
+/**
+ * A routine is only usable with an id and a name. Everything else falls back:
+ * a routine the server forgot to grade lands as `unscheduled`, never as due -
+ * an invented due date is worse than a missing one.
+ */
+export function parseRoutine(value: unknown): Routine | null {
+  if (!isRecord(value)) return null;
+  const routineId = asString(value["routineId"]);
+  const name = asString(value["name"]);
+  if (routineId === undefined || name === undefined) return null;
+
+  const memberIds = asStringArray(value["memberIds"]);
+  const ownerMemberId = asString(value["ownerMemberId"]) ?? memberIds[0] ?? "";
+  const intervalDays = asInt(value["intervalDays"]);
+  const source = asString(value["intervalSource"]);
+  const paused = asBoolean(value["paused"], false);
+  const dueOn = asBareDate(value["dueOn"]);
+
+  return {
+    routineId,
+    name,
+    category: asString(value["category"]) ?? "other",
+    ownerMemberId,
+    memberIds: memberIds.length > 0 ? memberIds : ownerMemberId ? [ownerMemberId] : [],
+    tier: asOneOf(value["tier"], TIERS, "T2"),
+    visibility: asOneOf(value["visibility"], VISIBILITIES, "all"),
+    intervalDays: intervalDays !== null && intervalDays > 0 ? intervalDays : null,
+    // The source is meaningless without an interval (contract, domain notes).
+    intervalSource:
+      intervalDays === null
+        ? null
+        : source !== undefined && (INTERVAL_SOURCES as readonly string[]).includes(source)
+          ? (source as IntervalSource)
+          : null,
+    intervalNote: asString(value["intervalNote"]) ?? null,
+    intervalConfidence: asUnit(value["intervalConfidence"]),
+    anchor: asOneOf(value["anchor"], ANCHORS, "elapsed"),
+    catalogKey: asString(value["catalogKey"]) ?? null,
+    lastDoneOn: asBareDate(value["lastDoneOn"]),
+    dueOn,
+    dueEventId: asString(value["dueEventId"]) ?? null,
+    status: asOneOf(value["status"], ROUTINE_STATUSES, paused ? "paused" : "unscheduled"),
+    daysUntilDue: dueOn === null ? null : asInt(value["daysUntilDue"]),
+    completionCount: asCount(value["completionCount"]) ?? 0,
+    paused,
+  };
+}
+
+/** `GET /api/routines`. Throws only when the envelope itself is unusable. */
+export function parseRoutines(value: unknown): Routine[] {
+  if (!isRecord(value)) throw new Error("Routines response was not an object");
+  const raw = value["routines"];
+  if (!Array.isArray(raw)) throw new Error("Routines response is missing routines[]");
+  return raw.map(parseRoutine).filter((r): r is Routine => r !== null);
+}
+
+/** A single routine body, as returned by POST / PATCH / complete. */
+export function parseRoutineEnvelope(value: unknown): Routine {
+  const routine = parseRoutine(value);
+  if (routine === null) throw new Error("Routine response was missing routineId / name");
+  return routine;
+}
+
+export function parseCompletion(value: unknown): Completion | null {
+  if (!isRecord(value)) return null;
+  const completionId = asString(value["completionId"]);
+  const doneOn = asBareDate(value["doneOn"]);
+  if (completionId === undefined || doneOn === null) return null;
+  const out: Completion = {
+    completionId,
+    doneOn,
+    byMemberId: asString(value["byMemberId"]) ?? "",
+  };
+  const note = asString(value["note"]);
+  if (note !== undefined) out.note = note;
+  return out;
+}
+
+/** `GET /api/routines/{id}/completions`. */
+export function parseCompletions(value: unknown): Completion[] {
+  if (!isRecord(value)) throw new Error("Completions response was not an object");
+  const raw = value["completions"];
+  if (!Array.isArray(raw)) return [];
+  return raw.map(parseCompletion).filter((c): c is Completion => c !== null);
+}
+
+/**
+ * `POST /api/routines/estimate`. A reply with no rationale still counts - the
+ * form shows the number and says nothing about why - but a reply that is not
+ * an object is an error the form has to surface.
+ */
+export function parseEstimate(value: unknown): EstimateResponse {
+  if (!isRecord(value)) throw new Error("Estimate response was not an object");
+  const intervalDays = asInt(value["intervalDays"]);
+  const rangeRaw = value["rangeDays"];
+  let rangeDays: [number, number] | null = null;
+  if (Array.isArray(rangeRaw) && rangeRaw.length === 2) {
+    const lo = asInt(rangeRaw[0]);
+    const hi = asInt(rangeRaw[1]);
+    if (lo !== null && hi !== null) rangeDays = [lo, hi];
+  }
+  return {
+    intervalDays: intervalDays !== null && intervalDays > 0 ? intervalDays : null,
+    rangeDays,
+    confidence: asUnit(value["confidence"]),
+    source: asOneOf(value["source"], ["catalog", "estimated"] as const, "estimated"),
+    rationale: asString(value["rationale"]) ?? "",
+    usageDependent: asBoolean(value["usageDependent"], false),
+    followUpQuestion: asString(value["followUpQuestion"]) ?? null,
+    catalogKey: asString(value["catalogKey"]) ?? null,
+    category: asString(value["category"]) ?? null,
+    anchor: asOneOf(value["anchor"], ANCHORS, "elapsed"),
+  };
 }
 
 export interface ApiErrorShape {

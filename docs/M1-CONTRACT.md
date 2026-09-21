@@ -59,7 +59,8 @@ Base path: `/api`. All JSON, `camelCase` on the wire, `snake_case` in Python.
           "visibility": "all",
           "isFamily": true,                       // memberIds.length > 1 && tier == T1
           "status": "confirmed",                  // "proposed" until an adult confirms (issue #4)
-          "occurrenceId": "evt_01J...@2026-08-04T20:00:00Z"  // set on expanded instances
+          "occurrenceId": "evt_01J...@2026-08-04T20:00:00Z",  // set on expanded instances
+          "routineId": "rtn_..."                  // additive, optional: set on a routine's due event (ROUTINES-CONTRACT)
         },
         {
           "kind": "busy",                         // T3 collapse. NEVER omitted, NEVER hidden.

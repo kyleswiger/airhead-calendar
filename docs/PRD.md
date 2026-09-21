@@ -38,7 +38,9 @@ solve *signal*. That's the gap.
 
 **Non-goals (v1)**
 - Writing back to external calendars (v2 — schema and adapter interface are built for it now).
-- Task lists, chores, meal planning, shopping lists, photo frame mode.
+- Task lists, daily chores, meal planning, shopping lists, photo frame mode. (*Occasional*
+  routines — "when did we last change the cabin air filter?" — are in scope as of
+  2026-09-20; see §6.4 and `docs/ROUTINES-CONTRACT.md`.)
 - Multi-household / multi-tenant. One household, hardcoded roster of 3.
 - Free/busy negotiation with people outside the household.
 
@@ -136,6 +138,19 @@ Duplicates are never deleted. Source records are immutable truth; a merge group 
 with one designated canonical record. Unmerging is always possible and lossless.
 
 ---
+
+### 6.4 Routines (added 2026-09-20)
+
+The things a household does *every so often* and otherwise tracks in somebody's head:
+cabin air filter, haircut, gutters, holiday lights up/down, flea meds, smoke-alarm batteries.
+A routine records when it was **last done** and projects when it is **next due** as one
+all-day event on the kitchen calendar, so the mental load ("how long has it been?") moves
+out of the airy head and onto the wall. The interval is resolved deterministically first —
+a number the person stated, then the household's own observed cadence, then a curated
+catalog of ~110 common items — and only then by a model estimate, which is labelled as such
+and correctable with one tap. An overdue routine is rolled onto *today* every day until it
+is done, snoozed or paused; like T3 collapse, nothing that mattered once may silently vanish.
+Full contract: `docs/ROUTINES-CONTRACT.md`.
 
 ## 7. Data model
 

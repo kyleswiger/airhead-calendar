@@ -10,9 +10,11 @@ interface DayViewProps {
   members: MemberIndex;
   /** Shown above the list when the selected day isn't today. */
   heading?: string;
+  /** Tap-to-complete for rows that are a routine's due event. */
+  onCompleteRoutine?: (routineId: string) => void;
 }
 
-export function DayView({ day, members, heading }: DayViewProps) {
+export function DayView({ day, members, heading, onCompleteRoutine }: DayViewProps) {
   const rows = orderedRows(day, members);
 
   return (
@@ -35,6 +37,7 @@ export function DayView({ day, members, heading }: DayViewProps) {
                 event={row}
                 members={members}
                 onDate={day.date}
+                {...(onCompleteRoutine ? { onCompleteRoutine } : {})}
               />
             ),
           )}

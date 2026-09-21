@@ -15,12 +15,23 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
-from airhead.domain import EventStatus, MemberRole, Tier, TierSource, Visibility
+from airhead.domain import (
+    Anchor,
+    EventStatus,
+    IntervalSource,
+    MemberRole,
+    Tier,
+    TierSource,
+    Visibility,
+)
 
 MAX_TITLE = 500
 MAX_LOCATION = 500
 MAX_MESSAGE = 2000
 MAX_ID = 200
+MAX_NAME = 200
+MAX_NOTE = 1000
+MAX_CATEGORY = 100
 
 
 class Wire(BaseModel):
@@ -74,6 +85,7 @@ class EventRowOut(Wire):
     status: EventStatus = EventStatus.CONFIRMED
     is_family: bool
     occurrence_id: str | None = None
+    routine_id: str | None = None  # additive: set on a routine's due event (ROUTINES-CONTRACT)
 
 
 class BusyRowOut(Wire):
@@ -293,3 +305,121 @@ class EventPatch(Wire):
         if self.start_local and self.end_local and self.end_local < self.start_local:
             raise ValueError("endLocal precedes startLocal")
         return self
+
+
+# --- routines (docs/ROUTINES-CONTRACT.md) ------------------------------------
+
+RoutineStatus = Literal["paused", "unscheduled", "overdue", "due_soon", "ok"]
+EstimateSource = Literal["catalog", "estimated"]
+
+
+class RoutineOut(Wire):
+    routine_id: str
+    name: str
+    category: str
+    owner_member_id: str
+    member_ids: list[str]
+    tier: Tier
+    visibility: Visibility
+    interval_days: int | None
+    interval_source: IntervalSource | None  # null while intervalDays is null
+    interval_note: str | None
+    interval_confidence: float | None
+    anchor: Anchor
+    catalog_key: str | None
+    last_done_on: dt.date | None
+    due_on: dt.date | None
+    due_event_id: str | None
+    status: RoutineStatus
+    days_until_due: int | None
+    completion_count: int
+    paused: bool
+
+
+class RoutinesResponse(Wire):
+    routines: list[RoutineOut]
+
+
+class RoutineCreate(Wire):
+    name: str = Field(min_length=1, max_length=MAX_NAME)
+    category: str | None = Field(default=None, min_length=1, max_length=MAX_CATEGORY)
+    interval_days: int | None = Field(default=None, ge=1)
+    anchor: Anchor | None = None
+    owner_member_id: str | None = None
+    involves: list[str] = Field(default_factory=list)
+    tier: Tier | None = None
+    visibility: Visibility | None = None
+    last_done_on: dt.date | None = None
+    due_on: dt.date | None = None
+    # A client that already ran POST /api/routines/estimate passes the result through.
+    # Only `estimated` is honoured as a pass-through; any other source with an
+    # `intervalDays` is the person stating the interval, i.e. `human`.
+    interval_note: str | None = Field(default=None, max_length=MAX_NOTE)
+    interval_confidence: float | None = Field(default=None, ge=0, le=1)
+    interval_source: IntervalSource | None = None
+
+    @field_validator("name", "category")
+    @classmethod
+    def _not_blank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+
+class RoutinePatch(Wire):
+    """Every field optional. `model_fields_set` distinguishes absent from explicit null."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=MAX_NAME)
+    category: str | None = Field(default=None, min_length=1, max_length=MAX_CATEGORY)
+    interval_days: int | None = Field(default=None, ge=1)
+    anchor: Anchor | None = None
+    involves: list[str] | None = None
+    tier: Tier | None = None
+    visibility: Visibility | None = None
+    due_on: dt.date | None = None
+    paused: bool | None = None
+    interval_note: str | None = Field(default=None, max_length=MAX_NOTE)
+
+    @field_validator("name", "category")
+    @classmethod
+    def _not_blank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+
+class CompleteBody(Wire):
+    done_on: dt.date | None = None  # defaults to today, household-local
+    note: str | None = Field(default=None, max_length=MAX_NOTE)
+
+
+class CompletionOut(Wire):
+    completion_id: str
+    done_on: dt.date
+    by_member_id: str
+    note: str | None = None
+
+
+class CompletionsResponse(Wire):
+    completions: list[CompletionOut]
+
+
+class EstimateRequest(Wire):
+    name: str = Field(min_length=1, max_length=MAX_NAME)
+    context: str | None = Field(default=None, max_length=MAX_MESSAGE)
+
+
+class EstimateResponse(Wire):
+    """`intervalDays` and `source` are null together when neither the catalog nor the
+    model could answer - ground rule 1 step 5: never invent a number silently."""
+
+    interval_days: int | None
+    range_days: tuple[int, int] | None = None
+    confidence: float | None = None
+    source: EstimateSource | None
+    rationale: str | None = None
+    usage_dependent: bool = False
+    follow_up_question: str | None = None
+    catalog_key: str | None = None
+    category: str | None = None
+    anchor: Anchor | None = None

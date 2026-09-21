@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
-from airhead.domain import Event, Member, Source, Tier, Visibility
+from airhead.domain import Completion, Event, Member, Routine, Source, Tier, Visibility
 
 # Tiers ordered from most to least household-relevant, for `min_tier` filtering.
 TIER_ORDER: dict[Tier, int] = {Tier.HOUSEHOLD: 0, Tier.PERSONAL: 1, Tier.BUSY: 2}
@@ -116,6 +116,44 @@ class SourceRepo(Protocol):
     def list(self, household_id: str) -> list[Source]: ...
 
     def put(self, source: Source) -> Source: ...
+
+
+@runtime_checkable
+class RoutineRepo(Protocol):
+    """Routines and their completions (docs/ROUTINES-CONTRACT.md § Storage).
+
+    Visibility is *not* filtered here: the set is tiny (tens of rows per
+    household), so `airhead.routines.service.visible_to` narrows it above this
+    layer with the same rule `AgendaQuery.allows` uses for events.
+    """
+
+    def get(self, household_id: str, routine_id: str) -> Routine | None:
+        """Return the routine including tombstones; callers decide what to do with them."""
+        ...
+
+    def put(self, routine: Routine) -> Routine:
+        """Create or fully replace. Returns the stored record with `updated_at` set."""
+        ...
+
+    def delete(self, household_id: str, routine_id: str, *, at: datetime) -> Routine | None:
+        """Soft-delete: stamp `deleted_at`. Returns None if the routine never existed."""
+        ...
+
+    def list(self, household_id: str, *, include_deleted: bool = False) -> list[Routine]:
+        """Every routine in the household, ordered by routine_id."""
+        ...
+
+    def add_completion(self, completion: Completion) -> Completion:
+        """Append one completion. Returns it with `created_at` set."""
+        ...
+
+    def list_completions(self, household_id: str, routine_id: str) -> list[Completion]:
+        """All completions for one routine, ordered by done_on then completion_id."""
+        ...
+
+    def delete_completion(self, household_id: str, routine_id: str, completion_id: str) -> bool:
+        """Hard-delete one completion (the undo). False if it did not exist."""
+        ...
 
 
 class RepoError(RuntimeError):

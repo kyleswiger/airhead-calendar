@@ -58,6 +58,11 @@ interface EventRowBase {
   occurrenceId?: string;
   /** True instant. Present for ordering/debug; the display never positions with it. */
   startUtc?: string;
+  /**
+   * Set when this row is the due event a routine owns (`docs/ROUTINES-CONTRACT.md`).
+   * Drives the DUE chip and tap-to-complete; the display never computes the date.
+   */
+  routineId?: string;
 }
 
 /** A timed row: floating household-local datetimes, "2026-08-04T16:00:00". */
@@ -202,4 +207,108 @@ export interface AgentTurnResponse {
   /** Present iff the agent stopped on a gate. */
   pendingConfirmation?: PendingConfirmation;
   usage?: AgentUsage;
+}
+
+/* ------------------------------------------------------------ routines -- */
+
+/**
+ * Hand-written mirror of `docs/ROUTINES-CONTRACT.md`.
+ *
+ * Same subset-of-the-wire rule. Every date is a bare household-local
+ * `YYYY-MM-DD`; the display never adds an interval to one - the server is the
+ * only clock, and it sends `status` / `daysUntilDue` already worked out.
+ */
+
+export type RoutineStatus = "paused" | "unscheduled" | "overdue" | "due_soon" | "ok";
+export type IntervalSource = "human" | "observed" | "catalog" | "estimated";
+export type RoutineAnchor = "elapsed" | "calendar";
+
+export interface Routine {
+  routineId: string;
+  /** The household's own words: "Cabin air filter — EV6". */
+  name: string;
+  category: string;
+  ownerMemberId: string;
+  /** Owner + involves, roster order - same rule as event rows. */
+  memberIds: string[];
+  tier: Tier;
+  visibility: Visibility;
+  /** Null while the routine is `unscheduled`. */
+  intervalDays: number | null;
+  /** Null when `intervalDays` is null; "estimated" is what earns the `est.` chip. */
+  intervalSource: IntervalSource | null;
+  /** One line of "why": a catalog note or the model's rationale. */
+  intervalNote: string | null;
+  /** 0..1, estimated only. */
+  intervalConfidence: number | null;
+  anchor: RoutineAnchor;
+  catalogKey: string | null;
+  lastDoneOn: string | null;
+  dueOn: string | null;
+  dueEventId: string | null;
+  status: RoutineStatus;
+  /** Negative when overdue, null when there is no `dueOn`. */
+  daysUntilDue: number | null;
+  completionCount: number;
+  paused: boolean;
+}
+
+export interface Completion {
+  completionId: string;
+  doneOn: string;
+  byMemberId: string;
+  note?: string;
+}
+
+/** `POST /api/routines/estimate`. Writes nothing; catalog hit ⇒ no model call. */
+export interface EstimateResponse {
+  intervalDays: number | null;
+  rangeDays: [number, number] | null;
+  confidence: number | null;
+  source: "catalog" | "estimated";
+  rationale: string;
+  usageDependent: boolean;
+  /** Set when the model needs one more fact to do better. */
+  followUpQuestion: string | null;
+  catalogKey: string | null;
+  category: string | null;
+  anchor: RoutineAnchor;
+}
+
+/** `POST /api/routines`. `intervalDays` present ⇒ `human` unless a source is passed through. */
+export interface CreateRoutineBody {
+  name: string;
+  category?: string;
+  intervalDays?: number;
+  anchor?: RoutineAnchor;
+  ownerMemberId?: string;
+  involves?: string[];
+  tier?: Tier;
+  visibility?: Visibility;
+  /** Present ⇒ a first completion is recorded. */
+  lastDoneOn?: string;
+  dueOn?: string;
+  intervalNote?: string;
+  intervalConfidence?: number;
+  intervalSource?: IntervalSource;
+}
+
+/** `PATCH /api/routines/{id}`. `intervalDays` here stamps `human`; `dueOn` is a snooze. */
+export interface RoutinePatch {
+  name?: string;
+  category?: string;
+  intervalDays?: number;
+  anchor?: RoutineAnchor;
+  involves?: string[];
+  tier?: Tier;
+  visibility?: Visibility;
+  dueOn?: string;
+  paused?: boolean;
+  intervalNote?: string;
+}
+
+export interface CompleteRoutineBody {
+  /** Defaults to today on the server; may not be in the future. */
+  doneOn?: string;
+  note?: string;
 }

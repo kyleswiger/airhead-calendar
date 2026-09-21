@@ -7,6 +7,12 @@ Key layout, all in one table:
                    SK = RECUR#<startUtc>#<eventId>    copy of a recurring master
                    SK = MEMBER#<memberId>
                    SK = SOURCE#<sourceId>
+                   SK = ROUTINE#<routineId>
+                   SK = RCOMP#<routineId>#<doneOn>#<completionId>   one completion
+
+The completion sort key embeds the ISO date so a `begins_with` on the routine
+prefix comes back already in `done_on` order - the order the observed-interval
+rule and the undo path both want - without a sort in Python.
 
 Two of those need justifying, because the PRD's table only names the first.
 
@@ -31,7 +37,8 @@ import os
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from functools import cached_property
 from typing import Any
 
@@ -40,11 +47,15 @@ from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
 from airhead.domain import (
+    Anchor,
+    Completion,
     Event,
     EventSource,
     EventStatus,
+    IntervalSource,
     Member,
     MemberRole,
+    Routine,
     Source,
     SourceKind,
     Tier,
@@ -108,6 +119,14 @@ def _recur_sk(event_sk: str) -> str:
     return "RECUR#" + event_sk.removeprefix("EVENT#")
 
 
+def _routine_sk(routine_id: str) -> str:
+    return f"ROUTINE#{routine_id}"
+
+
+def _completion_sk(routine_id: str, done_on: date, completion_id: str) -> str:
+    return f"RCOMP#{routine_id}#{done_on.isoformat()}#{completion_id}"
+
+
 class _DynamoRepo:
     def __init__(
         self,
@@ -126,6 +145,15 @@ class _DynamoRepo:
         # moto mock entered after construction is the one that gets used.
         resource = self._resource or boto3.resource("dynamodb")
         return resource.Table(self.table_name)
+
+    def _query_all(self, **kwargs: Any) -> Iterator[dict[str, Any]]:
+        while True:
+            response = self.table.query(**kwargs)
+            yield from response.get("Items", [])
+            last_key = response.get("LastEvaluatedKey")
+            if not last_key:
+                return
+            kwargs["ExclusiveStartKey"] = last_key
 
 
 class DynamoEventRepo(_DynamoRepo):
@@ -246,14 +274,81 @@ class DynamoEventRepo(_DynamoRepo):
             ).get("Item")
         return item["targetSk"] if item else None
 
-    def _query_all(self, **kwargs: Any) -> Iterator[dict[str, Any]]:
-        while True:
-            response = self.table.query(**kwargs)
-            yield from response.get("Items", [])
-            last_key = response.get("LastEvaluatedKey")
-            if not last_key:
-                return
-            kwargs["ExclusiveStartKey"] = last_key
+
+class DynamoRoutineRepo(_DynamoRepo):
+    def get(self, household_id: str, routine_id: str) -> Routine | None:
+        with _translate():
+            item = self.table.get_item(
+                Key={"PK": _pk(household_id), "SK": _routine_sk(routine_id)}
+            ).get("Item")
+        return _item_to_routine(item) if item else None
+
+    def put(self, routine: Routine) -> Routine:
+        stored = replace(routine, updated_at=self._clock())
+        with _translate():
+            self.table.put_item(Item=_routine_to_item(stored))
+        return stored
+
+    def delete(self, household_id: str, routine_id: str, *, at: datetime) -> Routine | None:
+        existing = self.get(household_id, routine_id)
+        if existing is None:
+            return None
+        return self.put(replace(existing, deleted_at=at))
+
+    def list(self, household_id: str, *, include_deleted: bool = False) -> list[Routine]:
+        with _translate():
+            items = list(
+                self._query_all(
+                    KeyConditionExpression=Key("PK").eq(_pk(household_id))
+                    & Key("SK").begins_with("ROUTINE#")
+                )
+            )
+        # Sort-key order is routine_id order, which is the contract's ordering.
+        # Tombstones are dropped here rather than with a FilterExpression so the
+        # rule is the one line both backends share, not two copies that drift.
+        routines = (_item_to_routine(i) for i in items)
+        return [r for r in routines if include_deleted or not r.is_deleted]
+
+    def add_completion(self, completion: Completion) -> Completion:
+        stored = replace(completion, created_at=completion.created_at or self._clock())
+        with _translate():
+            self.table.put_item(Item=_completion_to_item(stored))
+        return stored
+
+    def list_completions(self, household_id: str, routine_id: str) -> list[Completion]:
+        with _translate():
+            items = list(
+                self._query_all(
+                    KeyConditionExpression=Key("PK").eq(_pk(household_id))
+                    & Key("SK").begins_with(f"RCOMP#{routine_id}#")
+                )
+            )
+        # The sort key is <doneOn>#<completionId>, so this is already the
+        # contract's "done_on then completion_id" order.
+        return [_item_to_completion(i) for i in items]
+
+    def delete_completion(self, household_id: str, routine_id: str, completion_id: str) -> bool:
+        # The key embeds done_on, which the undo caller does not have; one
+        # bounded query finds the item, and ALL_OLD makes the delete itself say
+        # whether anything was there (a mis-tapped undo must not report success).
+        with _translate():
+            match = next(
+                (
+                    i
+                    for i in self._query_all(
+                        KeyConditionExpression=Key("PK").eq(_pk(household_id))
+                        & Key("SK").begins_with(f"RCOMP#{routine_id}#")
+                    )
+                    if i.get("completionId") == completion_id
+                ),
+                None,
+            )
+            if match is None:
+                return False
+            response = self.table.delete_item(
+                Key={"PK": match["PK"], "SK": match["SK"]}, ReturnValues="ALL_OLD"
+            )
+        return "Attributes" in response
 
 
 class DynamoMemberRepo(_DynamoRepo):
@@ -368,6 +463,7 @@ def _event_to_item(event: Event) -> dict[str, Any]:
         "mergeGroupId": event.merge_group_id,
         "recurrenceParentId": event.recurrence_parent_id,
         "recurrenceId": event.recurrence_id,
+        "routineId": event.routine_id,
         "createdBy": event.created_by,
     }
     item.update({k: v for k, v in optional.items() if v is not None})
@@ -409,9 +505,105 @@ def _item_to_event(item: dict[str, Any]) -> Event:
         merge_group_id=item.get("mergeGroupId"),
         recurrence_parent_id=item.get("recurrenceParentId"),
         recurrence_id=item.get("recurrenceId"),
+        routine_id=item.get("routineId"),
         created_by=item.get("createdBy"),
         updated_at=decode_instant(item["updatedAt"]) if item.get("updatedAt") else None,
         deleted_at=decode_instant(item["deletedAt"]) if item.get("deletedAt") else None,
+    )
+
+
+def _routine_to_item(routine: Routine) -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "PK": _pk(routine.household_id),
+        "SK": _routine_sk(routine.routine_id),
+        "entity": "routine",
+        "householdId": routine.household_id,
+        "routineId": routine.routine_id,
+        "name": routine.name,
+        "ownerMemberId": routine.owner_member_id,
+        "category": routine.category,
+        "intervalSource": routine.interval_source.value,
+        "anchor": routine.anchor.value,
+        "involves": list(routine.involves),
+        "tier": routine.tier.value,
+        "visibility": routine.visibility.value,
+        "paused": routine.paused,
+    }
+    optional = {
+        "intervalDays": routine.interval_days,
+        "intervalNote": routine.interval_note,
+        # boto3 refuses a float; Decimal(str(...)) keeps the digits a person typed.
+        "intervalConfidence": (
+            Decimal(str(routine.interval_confidence))
+            if routine.interval_confidence is not None
+            else None
+        ),
+        "catalogKey": routine.catalog_key,
+        "lastDoneOn": routine.last_done_on.isoformat() if routine.last_done_on else None,
+        "dueOn": routine.due_on.isoformat() if routine.due_on else None,
+        "dueEventId": routine.due_event_id,
+        "createdBy": routine.created_by,
+        "updatedAt": encode_instant(routine.updated_at) if routine.updated_at else None,
+        "deletedAt": encode_instant(routine.deleted_at) if routine.deleted_at else None,
+    }
+    item.update({k: v for k, v in optional.items() if v is not None})
+    return item
+
+
+def _item_to_routine(item: dict[str, Any]) -> Routine:
+    confidence = item.get("intervalConfidence")
+    return Routine(
+        routine_id=item["routineId"],
+        household_id=item["householdId"],
+        name=item["name"],
+        owner_member_id=item["ownerMemberId"],
+        category=item.get("category", "other"),
+        interval_days=int(item["intervalDays"]) if item.get("intervalDays") is not None else None,
+        interval_source=IntervalSource(item["intervalSource"]),
+        interval_note=item.get("intervalNote"),
+        interval_confidence=float(confidence) if confidence is not None else None,
+        anchor=Anchor(item["anchor"]),
+        involves=list(item.get("involves", [])),
+        tier=Tier(item["tier"]),
+        visibility=Visibility(item["visibility"]),
+        catalog_key=item.get("catalogKey"),
+        last_done_on=date.fromisoformat(item["lastDoneOn"]) if item.get("lastDoneOn") else None,
+        due_on=date.fromisoformat(item["dueOn"]) if item.get("dueOn") else None,
+        due_event_id=item.get("dueEventId"),
+        paused=bool(item.get("paused", False)),
+        created_by=item.get("createdBy"),
+        updated_at=decode_instant(item["updatedAt"]) if item.get("updatedAt") else None,
+        deleted_at=decode_instant(item["deletedAt"]) if item.get("deletedAt") else None,
+    )
+
+
+def _completion_to_item(completion: Completion) -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "PK": _pk(completion.household_id),
+        "SK": _completion_sk(completion.routine_id, completion.done_on, completion.completion_id),
+        "entity": "routineCompletion",
+        "householdId": completion.household_id,
+        "routineId": completion.routine_id,
+        "completionId": completion.completion_id,
+        "doneOn": completion.done_on.isoformat(),
+        "byMemberId": completion.by_member_id,
+    }
+    if completion.note is not None:
+        item["note"] = completion.note
+    if completion.created_at:
+        item["createdAt"] = encode_instant(completion.created_at)
+    return item
+
+
+def _item_to_completion(item: dict[str, Any]) -> Completion:
+    return Completion(
+        completion_id=item["completionId"],
+        household_id=item["householdId"],
+        routine_id=item["routineId"],
+        done_on=date.fromisoformat(item["doneOn"]),
+        by_member_id=item["byMemberId"],
+        note=item.get("note"),
+        created_at=decode_instant(item["createdAt"]) if item.get("createdAt") else None,
     )
 
 

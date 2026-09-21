@@ -28,7 +28,7 @@ from airhead.agent.tools import (
 )
 from airhead.domain import Member
 from airhead.history import to_wire_content, to_wire_message
-from airhead.repo.base import EventRepo, MemberRepo
+from airhead.repo.base import EventRepo, MemberRepo, RoutineRepo
 
 __all__ = [
     "AgentDeps",
@@ -82,6 +82,7 @@ class TurnResult:
 class AgentDeps:
     events: EventRepo
     members: MemberRepo
+    routines: RoutineRepo
     # An Anthropic client (legacy AnthropicBedrock in prod); injected so tests can fake it.
     client: Any
     model: str = "us.anthropic.claude-sonnet-4-6"
@@ -98,6 +99,7 @@ def run_turn(request: TurnRequest, *, deps: AgentDeps) -> TurnResult:
         actor=request.actor,
         events=deps.events,
         members=deps.members,
+        routines=deps.routines,
         now=request.now,
         tz=request.tz,
         confirm=request.confirm,
