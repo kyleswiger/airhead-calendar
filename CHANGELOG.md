@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.0](https://github.com/kyleswiger/airhead-calendar/compare/v1.0.0...v1.1.0) (2026-09-21)
+
+
+### Features
+
+* **routines:** log occasional tasks and project when they're next due ([#25](https://github.com/kyleswiger/airhead-calendar/issues/25)) ([c187864](https://github.com/kyleswiger/airhead-calendar/commit/c1878644586263349efd7bd41810e1fe2e3b476f))
+
+
+### Performance Improvements
+
+* **agent:** default agent_effort to low (issue [#9](https://github.com/kyleswiger/airhead-calendar/issues/9) sweep, step 1) ([#23](https://github.com/kyleswiger/airhead-calendar/issues/23))d ([e77ce01](https://github.com/kyleswiger/airhead-calendar/commit/e77ce0162dac70775927c2a8155e1274fb05c47d))
+
 ## 1.0.0 (2026-08-27)
 
 
