@@ -95,8 +95,8 @@ export VITE_API_BASE=$(terraform -chdir=infra output -raw api_base_url)
 M1 uses the raw `execute-api` URL; a custom domain is a later milestone. CORS allows exactly
 `https://<subdomain>.<root_domain>`, so the API is not reachable from a page served anywhere
 else — including `localhost` during frontend development. Run the backend locally
-(`AIRHEAD_REPO_BACKEND=sqlite uvicorn airhead.api:app`) rather than pointing a dev server at
-the deployed API.
+(`cd backend && .venv/bin/python dev_server.py` — seeded in-memory SQLite plus localhost-only
+CORS) rather than pointing a dev server at the deployed API.
 
 ## M2: the agent
 
