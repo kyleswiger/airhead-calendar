@@ -10,7 +10,7 @@
 # there cannot change this stack's IAM without a deliberate bump here, which
 # Dependabot raises as a PR.
 module "github_actions" {
-  source = "git::https://github.com/kyleswiger/aws-deployment-tooling.git//terraform-modules/github-oidc-role?ref=v1.0.0"
+  source = "git::https://github.com/kyleswiger/aws-deployment-tooling.git//terraform-modules/github-oidc-role?ref=v1.1.0"
 
   name_prefix = var.project
   github_repo = "kyleswiger/airhead-calendar"
