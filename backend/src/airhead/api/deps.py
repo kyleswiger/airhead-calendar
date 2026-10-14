@@ -112,9 +112,12 @@ def verified_claims(request: Request) -> dict[str, Any] | None:
     API Gateway and only on routes that carry the authorizer (the `/family/*` routes in
     infra/api.tf). Signature, expiry, issuer and client id are all checked there.
     """
-    event = request.scope.get("aws.event") or {}
-    claims = event.get("requestContext", {}).get("authorizer", {}).get("jwt", {}).get("claims")
-    return claims if isinstance(claims, dict) and claims.get("sub") else None
+    node: Any = request.scope.get("aws.event")
+    for key in ("requestContext", "authorizer", "jwt", "claims"):
+        if not isinstance(node, dict):
+            return None
+        node = node.get(key)
+    return node if isinstance(node, dict) and node.get("sub") else None
 
 
 def get_household_id(request: Request) -> str:

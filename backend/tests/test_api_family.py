@@ -139,6 +139,11 @@ def test_roster_needs_no_actor_so_the_screen_can_choose_one(repos: Any) -> None:
     assert status == 200 and _member_ids(payload) == ["mem_parent"]
 
 
+def test_family_route_with_malformed_authorizer_is_401(repos: Any) -> None:
+    status, _ = invoke("GET", "/family/api/members", claims="not-a-dict")  # type: ignore[arg-type]
+    assert status == 401
+
+
 def test_demo_visitor_cannot_act_as_family_member(repos: Any) -> None:
     status, _ = invoke("GET", "/api/routines", member="mem_parent")
     assert status == 401
