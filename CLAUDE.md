@@ -9,7 +9,7 @@ Spec: `docs/PRD.md`; milestone contracts: `docs/M1-CONTRACT.md`, `docs/M2-CONTRA
   `agent/` (prompt, tool loop, tools), `repo/` (`sqlite.py` / `dynamo.py` behind `base.py`, `turns.py`),
   `routines/`, `domain.py`, `recurrence.py`, `handler.py` (Lambda entry `airhead.handler.handler`).
 - `frontend/` — Vite + React 19 + TS. `src/api.ts` picks real API vs bundled fixtures.
-- `infra/` — Terraform, single stack (S3+CloudFront site, DynamoDB, 2 Lambdas, HTTP API, GitHub OIDC role).
+- `infra/` — Terraform, single stack (S3+CloudFront site, DynamoDB, 2 Lambdas, HTTP API, Cognito, GitHub OIDC role).
 - `kiosk/` — placeholder README only (M5). `deploy.sh` — manual frontend ship from TF outputs.
 
 ## Commands (lint/test/typecheck/validate mirror ci.yml)
@@ -49,13 +49,21 @@ terraform fmt -check -recursive && terraform init -backend=false && terraform va
   `CLAUDE_CODE_OAUTH_TOKEN` (Claude workflows).
 - Lambda env (set only by `infra/lambda.tf`; names are the contract with `api/deps.py`):
   `AIRHEAD_TABLE`, `AIRHEAD_HOUSEHOLD_ID`, `AIRHEAD_TZ`, `AIRHEAD_LOG_LEVEL`, `AIRHEAD_REPO_BACKEND`,
-  `AIRHEAD_AGENT_MODEL`, `AIRHEAD_AGENT_EFFORT`, `AIRHEAD_AGENT_MAX_TOKENS`. Local-only: `AIRHEAD_SQLITE_PATH`.
+  `AIRHEAD_AGENT_MODEL`, `AIRHEAD_AGENT_EFFORT`, `AIRHEAD_AGENT_MAX_TOKENS`,
+  `AIRHEAD_FAMILY_HOUSEHOLD_ID`, `AIRHEAD_COGNITO_CLIENT_ID`. Local-only: `AIRHEAD_SQLITE_PATH`.
+- Two realms, one app: `/api/*` = public demo (`hh_1`), `/family/api/*` = private household behind
+  the Cognito JWT authorizer (`infra/cognito.tf`, `api.tf`). `deps.get_household_id` picks the realm
+  and trusts only `requestContext.authorizer` claims, never a header. Family roster/users are data:
+  `python -m airhead.admin` + `aws cognito-idp`, see README "Family sign-in".
 - Frontend build-time: `VITE_API_BASE`, `VITE_MEMBER_ID`.
 - No model API key: agent uses Bedrock via the Lambda role (`bedrock:InvokeModel*` in `iam.tf`).
   Future OAuth/CalDAV secrets go in SSM SecureString, never tfvars.
 
 ## Gotchas
-- Never change `var.project` or `var.household_id` after apply (resource names / DynamoDB PK prefix).
+- Never change `var.project`, `var.household_id` or `var.family_household_id` after apply
+  (resource names / DynamoDB PK prefix).
+- Family routes are explicit GET/POST/PATCH/DELETE, never ANY: an ANY route would send the
+  token-less CORS preflight through the JWT authorizer and 401 it.
 - `dns.tf` looks up the hosted zone via data source; never create one.
 - No VPC on any Lambda (NAT/endpoint cost). Don't add one.
 - Run `build-lambda.sh` before `terraform plan/apply` — `archive_file` needs `backend/build/api/`.

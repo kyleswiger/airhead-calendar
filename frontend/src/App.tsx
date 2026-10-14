@@ -1,11 +1,12 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 
-import { actingMemberId, usingFixture } from "./api";
+import { usingFixture, type Realm } from "./api";
 import { ChatPanel } from "./components/ChatPanel";
 import { DayView } from "./components/DayView";
 import { DisplayHeader } from "./components/DisplayHeader";
 import { NavBar, type ViewMode } from "./components/NavBar";
 import { RoutinesPanel } from "./components/RoutinesPanel";
+import { SessionControls } from "./components/SessionControls";
 import { StatusNote } from "./components/StatusNote";
 import { WeekView } from "./components/WeekView";
 import { useAgenda } from "./hooks/useAgenda";
@@ -17,7 +18,16 @@ import { addDays, daysBetween, formatMonthDay, todayIsoDate } from "./lib/format
 
 const WEEK_DAYS = 7;
 
-export function App() {
+interface AppProps {
+  realm: Realm;
+  /** Who this screen acts as (`X-Airhead-Member`); `Root` owns the choice. */
+  actorId: string;
+  onActorChange: (memberId: string) => void;
+  /** Sign out (family) or leave the demo. Absent in fixture mode. */
+  onExit?: () => void;
+}
+
+export function App({ realm, actorId, onActorChange, onExit }: AppProps) {
   const now = useNow();
   const today = todayIsoDate(now);
 
@@ -39,7 +49,7 @@ export function App() {
   }, [today, selected]);
 
   const windowEnd = addDays(windowStart, WEEK_DAYS - 1);
-  const { data, status, error, fetchedAt, stale, reload } = useAgenda(windowStart, windowEnd);
+  const { data, status, error, fetchedAt, stale, reload } = useAgenda(windowStart, windowEnd, realm);
 
   const members = useMemo(() => indexMembers(data?.members ?? []), [data]);
 
@@ -94,11 +104,26 @@ export function App() {
 
   return (
     <main className="shell">
-      <DisplayHeader date={headerDate} now={now} {...(context ? { context } : {})} />
+      <DisplayHeader date={headerDate} now={now} {...(context ? { context } : {})}>
+        <SessionControls
+          members={data?.members ?? []}
+          actorId={actorId}
+          onActorChange={onActorChange}
+          {...(onExit !== undefined
+            ? { onExit, exitLabel: realm === "family" ? "Sign out" : "Exit demo" }
+            : {})}
+        />
+      </DisplayHeader>
       {/* A stable grid child even when there is nothing to say - otherwise the
           rows shift up and the nav bar claims the content row's 1fr. */}
       <div className="status-slot">
-        <StatusNote fixture={usingFixture} stale={stale} fetchedAt={fetchedAt} now={now} />
+        <StatusNote
+          fixture={usingFixture}
+          demo={!usingFixture && realm === "demo"}
+          stale={stale}
+          fetchedAt={fetchedAt}
+          now={now}
+        />
       </div>
 
       <div className="content">
@@ -149,8 +174,8 @@ export function App() {
       {chatOpen ? (
         <ChatPanel
           chat={chat}
-          actor={members.get(actingMemberId)}
-          actorId={actingMemberId}
+          actor={members.get(actorId)}
+          actorId={actorId}
           onClose={closeChat}
         />
       ) : null}

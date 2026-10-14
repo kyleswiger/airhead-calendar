@@ -3,6 +3,8 @@ import { formatAge } from "../lib/format";
 interface StatusNoteProps {
   /** Rendering the bundled sample rather than live household data. */
   fixture: boolean;
+  /** The public demo household, not the family's own calendar. */
+  demo: boolean;
   /** Last attempt failed but there is still good data on screen. */
   stale: boolean;
   fetchedAt: number | null;
@@ -16,11 +18,18 @@ interface StatusNoteProps {
  * agenda - so the last good payload stays up and this line says how old it is.
  * Silence here means the screen is live.
  */
-export function StatusNote({ fixture, stale, fetchedAt, now }: StatusNoteProps) {
+export function StatusNote({ fixture, demo, stale, fetchedAt, now }: StatusNoteProps) {
   if (fixture) {
     return (
       <p className="status status--sample" role="status">
         Sample data — no calendar connected yet
+      </p>
+    );
+  }
+  if (demo && !stale) {
+    return (
+      <p className="status status--sample" role="status">
+        Demo — a sample family, visible to anyone
       </p>
     );
   }
