@@ -84,6 +84,12 @@ resource "aws_lambda_function" "api" {
       # Lambda that silently fell back to an in-memory database would return empty
       # agendas and 200s rather than failing loudly.
       AIRHEAD_REPO_BACKEND = "dynamodb"
+
+      # Family sign-in (cognito.tf). The household is what `/family/*` requests read
+      # and write once API Gateway has verified the token; the client id is served,
+      # unauthenticated, to the launch screen by /api/auth/config.
+      AIRHEAD_FAMILY_HOUSEHOLD_ID = var.family_household_id
+      AIRHEAD_COGNITO_CLIENT_ID   = aws_cognito_user_pool_client.kiosk.id
     }
   }
 
@@ -185,6 +191,9 @@ resource "aws_lambda_function" "agent" {
       AIRHEAD_TZ           = var.household_timezone
       AIRHEAD_LOG_LEVEL    = var.log_level
       AIRHEAD_REPO_BACKEND = "dynamodb"
+
+      # Family turns (POST /family/api/agent/turn) resolve to this household.
+      AIRHEAD_FAMILY_HOUSEHOLD_ID = var.family_household_id
 
       # No API key variable, and no SSM parameter name either: the function invokes
       # Claude through the legacy bedrock-runtime InvokeModel endpoint, SigV4-signed with this role's own

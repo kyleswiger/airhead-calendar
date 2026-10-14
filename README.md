@@ -66,6 +66,38 @@ Then ship the site:
 Prerequisites: an AWS account, a domain registered in Route 53 with its hosted zone already
 present, and an S3 bucket + DynamoDB table for Terraform state.
 
+### Family sign-in
+
+The site opens on a launch screen: **Sign in to our calendar** (private) or **View the demo**
+(public placeholder household `hh_1`). The family calendar is a separate DynamoDB partition
+(`var.family_household_id`, default `hh_family`) served at `/family/api/*`, where API Gateway's
+JWT authorizer checks a Cognito access token before the Lambda runs. Cognito signs in the
+*household* (the kitchen screen is a shared device); the person acting is picked on screen
+(tap the name chip beside the clock).
+
+After `terraform apply`, create the login and the roster. Real names are arguments, never
+committed:
+
+```bash
+POOL=$(terraform -chdir=infra output -raw cognito_user_pool_id)
+HH=$(terraform -chdir=infra output -raw family_household_id)
+
+aws cognito-idp admin-create-user --user-pool-id "$POOL" --username kitchen \
+  --message-action SUPPRESS
+aws cognito-idp admin-set-user-password --user-pool-id "$POOL" --username kitchen \
+  --password '<12+ chars, with a number>' --permanent
+
+cd backend
+.venv/bin/python -m airhead.admin add-member --household "$HH" \
+  --id mem_<name> --name '<Name>' --role adult --color '#7aa2f7'   # repeat per person
+.venv/bin/python -m airhead.admin list-members --household "$HH"
+```
+
+Without `--permanent` the first sign-in asks for a new password. The screen stays signed in
+for `family_session_days` (default 365). It only signs out when Cognito rejects the refresh
+token; a network outage keeps the session. To sign out a lost or stolen device:
+`aws cognito-idp admin-user-global-sign-out --user-pool-id "$POOL" --username kitchen`.
+
 ## M1: the control plane
 
 M1 adds the DynamoDB table, the `api` Lambda, and an API Gateway HTTP API. The Lambda ships

@@ -29,6 +29,28 @@ variable "household_id" {
   default     = "hh_1"
 }
 
+variable "family_household_id" {
+  description = "The private household behind Cognito sign-in, kept apart from the public demo (var.household_id). Same rule as household_id: it is the DynamoDB partition prefix, so never change it after members are added."
+  type        = string
+  default     = "hh_family"
+
+  validation {
+    condition     = can(regex("^hh_[a-z0-9_]+$", var.family_household_id)) && var.family_household_id != var.household_id
+    error_message = "family_household_id must look like hh_<lowercase> and differ from household_id (the public demo)."
+  }
+}
+
+variable "family_session_days" {
+  description = "Refresh-token lifetime: how long the kitchen screen stays signed in without anyone touching it. Revoke early with Sign out or `aws cognito-idp admin-user-global-sign-out`."
+  type        = number
+  default     = 365
+
+  validation {
+    condition     = var.family_session_days >= 1 && var.family_session_days <= 3650
+    error_message = "Cognito allows 1-3650 days."
+  }
+}
+
 variable "household_timezone" {
   description = "IANA zone the kitchen display renders in. Events store their originating zone; this is what 'today' means."
   type        = string

@@ -134,6 +134,142 @@ button {
   line-height: 1;
 }
 
+.header__side {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+}
+
+/* -------------------------------------------------------------- session -- */
+
+.session {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.session__btn {
+  min-height: 4.5rem;
+  padding: 0 1.25rem;
+  font-size: var(--fs-min);
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  background: var(--surface);
+}
+
+.session__btn:disabled {
+  cursor: default;
+}
+
+.session__btn--armed {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+/* --------------------------------------------------------------- launch -- */
+
+.launch {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: clamp(1rem, 4vw, 4rem);
+}
+
+.launch__card {
+  width: min(100%, 40rem);
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.launch__title {
+  font-size: clamp(3rem, 7vw, 5.5rem);
+  font-weight: 200;
+  letter-spacing: -0.03em;
+}
+
+.launch__subtitle {
+  font-size: var(--fs-title);
+  color: var(--muted);
+  margin-top: -1rem;
+}
+
+.launch__notice,
+.launch__hint {
+  font-size: var(--fs-min);
+  color: var(--warn);
+}
+
+.launch__hint {
+  color: var(--muted);
+}
+
+.launch__choices,
+.launch__form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.launch__btn {
+  min-height: 5.5rem;
+  padding: 0 2rem;
+  font-size: var(--fs-body);
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  background: var(--surface);
+}
+
+.launch__btn--primary {
+  background: var(--surface-hi);
+  border-color: var(--fg);
+}
+
+.launch__btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.launch__label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  font-size: var(--fs-min);
+  color: var(--muted);
+}
+
+.launch__input {
+  min-height: 4.5rem;
+  padding: 0 1.25rem;
+  font: inherit;
+  font-size: var(--fs-body);
+  color: var(--fg);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+}
+
+.launch__input:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 2px;
+}
+
+.launch__error {
+  font-size: var(--fs-min);
+  color: var(--danger);
+}
+
+.launch__actions {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.launch__actions .launch__btn {
+  flex: 1 1 12rem;
+}
+
 /* --------------------------------------------------------------- status -- */
 
 .status {
