@@ -47,3 +47,13 @@ output "agent_function_name" {
 
 # No key-related outputs. The agent authenticates to Bedrock with its role's SigV4
 # credentials; there is no Anthropic API key, no SSM parameter, and no KMS key to name.
+
+output "cognito_user_pool_id" {
+  description = "For creating family users: aws cognito-idp admin-create-user --user-pool-id <this> ..."
+  value       = aws_cognito_user_pool.family.id
+}
+
+output "family_household_id" {
+  description = "Pass to `python -m airhead.admin --household` when adding family members."
+  value       = var.family_household_id
+}

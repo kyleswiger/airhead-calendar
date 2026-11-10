@@ -15,9 +15,9 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Annotated, Any
 
-from fastapi import Depends, Header
+from fastapi import Depends, Header, Request
 
-from airhead.api.errors import Unauthorized
+from airhead.api.errors import NotFound, Unauthorized
 from airhead.domain import Member
 from airhead.repo.base import EventRepo, MemberRepo, RoutineRepo, SourceRepo
 from airhead.repo.turns import TurnRepo
@@ -35,6 +35,12 @@ class Settings:
     agent_effort: str
     # Caps thinking *plus* response text, so it is sized well above the visible answer.
     agent_max_tokens: int
+    # The private household behind Cognito sign-in. None = family login not deployed yet,
+    # so `/family/*` answers 404 and the public demo (`household_id`) is all there is.
+    family_household_id: str | None = None
+    # Public SPA client id (no secret); served to the login screen by /api/auth/config.
+    cognito_client_id: str | None = None
+    region: str = "us-east-1"
 
 
 @lru_cache(maxsize=1)
@@ -48,6 +54,9 @@ def get_settings() -> Settings:
         agent_model=os.environ.get("AIRHEAD_AGENT_MODEL", "us.anthropic.claude-sonnet-4-6"),
         agent_effort=os.environ.get("AIRHEAD_AGENT_EFFORT", "medium"),
         agent_max_tokens=int(os.environ.get("AIRHEAD_AGENT_MAX_TOKENS", "16000")),
+        family_household_id=os.environ.get("AIRHEAD_FAMILY_HOUSEHOLD_ID") or None,
+        cognito_client_id=os.environ.get("AIRHEAD_COGNITO_CLIENT_ID") or None,
+        region=os.environ.get("AWS_REGION", "us-east-1"),
     )
 
 
@@ -92,8 +101,42 @@ def _repos() -> tuple[EventRepo, MemberRepo, SourceRepo, TurnRepo, RoutineRepo]:
     )
 
 
-def get_household_id() -> str:
-    return get_settings().household_id
+FAMILY_SCOPE_KEY = "airhead.family"
+
+
+def verified_claims(request: Request) -> dict[str, Any] | None:
+    """The Cognito claims API Gateway's JWT authorizer verified, or None.
+
+    Read off the Lambda event Mangum keeps in the ASGI scope, never off a header: a
+    client can send any header it likes, but `requestContext.authorizer` is written by
+    API Gateway and only on routes that carry the authorizer (the `/family/*` routes in
+    infra/api.tf). Signature, expiry, issuer and client id are all checked there.
+    """
+    node: Any = request.scope.get("aws.event")
+    for key in ("requestContext", "authorizer", "jwt", "claims"):
+        if not isinstance(node, dict):
+            return None
+        node = node.get(key)
+    return node if isinstance(node, dict) and node.get("sub") else None
+
+
+def get_household_id(request: Request) -> str:
+    """Which household this request reads and writes - the realm boundary.
+
+    `/family/*` (prefix stripped by `FamilyPrefixMiddleware`) is the private household
+    and requires verified claims; everything else is the public demo. The prefix only
+    *selects* the realm - the claims check is the gate - so a `/family` request that
+    reaches the unauthorized `$default` route (an unlisted method, say) is a 401, not a
+    read of the private calendar.
+    """
+    settings = get_settings()
+    if not request.scope.get(FAMILY_SCOPE_KEY):
+        return settings.household_id
+    if settings.family_household_id is None:
+        raise NotFound("Family calendar is not configured.")
+    if verified_claims(request) is None:
+        raise Unauthorized("Sign in to view the family calendar.")
+    return settings.family_household_id
 
 
 def get_tz() -> str:
@@ -180,12 +223,13 @@ def get_actor(
     household_id: Annotated[str, Depends(get_household_id)],
     x_airhead_member: Annotated[str | None, Header(alias="X-Airhead-Member")] = None,
 ) -> Member:
-    """Resolve the acting member from the M1 header shim.
+    """Resolve the acting member from the `X-Airhead-Member` header.
 
-    THIS IS THE ONLY FUNCTION COGNITO CHANGES. When the authorizer lands it reads the
-    verified `sub` off the request context and looks the member up by `cognito_sub`
-    instead of by header; every route already takes its actor from here and every
-    authorization decision downstream is already server-side, so nothing else moves.
+    Cognito authenticates the *household*, not the person (PRD §13): the kitchen
+    screen is a shared device signed in once, and the header picks who is acting from
+    that household's roster - the member-selection step. The lookup is scoped by
+    `household_id`, which `get_household_id` only resolves to the private household
+    after verifying the JWT, so a demo visitor cannot name a family member.
     """
     if not x_airhead_member:
         raise Unauthorized("Missing X-Airhead-Member header.")

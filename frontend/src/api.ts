@@ -3,16 +3,20 @@
  * typed data and never a `Response`.
  *
  * Two modes:
- *  - `VITE_API_BASE` set   -> real `GET /api/agenda`, with the M1 header shim
- *    `X-Airhead-Member` (a placeholder for the Cognito authorizer; the server
- *    still derives visibility itself - the display never asks for a tier or a
- *    visibility level, per the contract).
+ *  - `VITE_API_BASE` set   -> the real API, in one of two realms chosen on the
+ *    launch screen: `demo` (`/api/*`, the public placeholder household) or
+ *    `family` (`/family/api/*`, Cognito access token required - API Gateway
+ *    verifies it). Either way `X-Airhead-Member` names who is acting, and the
+ *    server resolves it against that realm's roster only and derives
+ *    visibility itself - the display never asks for a tier or a visibility
+ *    level, per the contract.
  *  - `VITE_API_BASE` unset -> the bundled fixture, rebased onto today so the
  *    site renders a believable week before the API Lambda exists.
  *
  * Alex / Sam / Riley in the fixture are placeholders. This repo is public.
  */
 
+import { accessToken, AuthError, invalidateSession } from "./auth";
 import agendaFixture from "./fixtures/agenda.sample.json";
 import eventsFixture from "./fixtures/events.sample.json";
 import { rebaseAgenda, shiftRow } from "./lib/agenda";
@@ -35,6 +39,7 @@ import {
   parseApiError,
   parseCompletions,
   parseEstimate,
+  parseMember,
   parseRoutineEnvelope,
   parseRoutines,
   parseRow,
@@ -48,6 +53,7 @@ import type {
   CreateRoutineBody,
   EstimateResponse,
   EventRow,
+  Member,
   Routine,
   RoutinePatch,
 } from "./types";
@@ -57,19 +63,31 @@ import { isEventRow } from "./types";
 const env: Record<string, string | undefined> = import.meta.env;
 
 const API_BASE = env["VITE_API_BASE"];
-/** M1 header shim actor. Defaults to the adult admin placeholder. */
-const MEMBER_ID = env["VITE_MEMBER_ID"] ?? "mem_alex";
-
-/**
- * Who this screen is acting as. Exported because the agent panel has to *show*
- * it: the kitchen display is in a shared space, and the acting identity decides
- * what the agent is allowed to do (PRD §10.1 - `actor_member_id` is injected
- * server-side from this header and the model cannot spoof it).
- */
-export const actingMemberId = MEMBER_ID;
+/** Demo-realm actor. Defaults to the adult admin placeholder. */
+export const DEMO_MEMBER_ID = env["VITE_MEMBER_ID"] ?? "mem_alex";
 
 /** True when we are rendering the bundled sample rather than live data. */
 export const usingFixture = typeof API_BASE !== "string" || API_BASE.length === 0;
+
+export type Realm = "demo" | "family";
+
+let realm: Realm = "demo";
+let actingMember = DEMO_MEMBER_ID;
+
+/** Set once per screen, before anything fetches (`Root` remounts the app on change). */
+export function setRealm(next: Realm): void {
+  realm = next;
+}
+
+/**
+ * Who this screen is acting as. The kitchen display is in a shared space, and
+ * the acting identity decides what the agent and the API allow (PRD §10.1 -
+ * `actor_member_id` is injected server-side from this header and the model
+ * cannot spoof it).
+ */
+export function setActingMember(memberId: string): void {
+  actingMember = memberId;
+}
 
 export class ApiError extends Error {
   readonly code: string;
@@ -87,8 +105,21 @@ function baseUrl(): string {
   return typeof API_BASE === "string" ? API_BASE.replace(/\/+$/, "") : "";
 }
 
-function headers(): Record<string, string> {
-  return { Accept: "application/json", "X-Airhead-Member": MEMBER_ID };
+function realmUrl(path: string): string {
+  return `${baseUrl()}${realm === "family" ? "/family" : ""}${path}`;
+}
+
+async function headers(forceRefresh = false): Promise<Record<string, string>> {
+  const out: Record<string, string> = { Accept: "application/json", "X-Airhead-Member": actingMember };
+  if (realm === "family") out["Authorization"] = `Bearer ${await accessToken(forceRefresh)}`;
+  return out;
+}
+
+/** Thrown when the family session is gone; `Root` has already returned to the launch screen. */
+export class SignedOutError extends ApiError {
+  constructor() {
+    super("Signed out", "signed_out", 401);
+  }
 }
 
 async function readJson(res: Response): Promise<unknown> {
@@ -115,10 +146,59 @@ async function unwrap(res: Response): Promise<unknown> {
   return body;
 }
 
+/**
+ * A 401 from API Gateway's JWT authorizer has no M1 envelope (`{"message":
+ * "Unauthorized"}`); a 401 from the app does (`unknown member`). Only the
+ * former is about the token.
+ */
+async function isGatewayReject(res: Response): Promise<boolean> {
+  if (res.status !== 401) return false;
+  try {
+    return parseApiError(await res.clone().json()) === null;
+  } catch {
+    return true;
+  }
+}
+
+async function send(
+  method: "GET" | "POST" | "PATCH" | "DELETE",
+  path: string,
+  payload?: unknown,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const attempt = async (forceRefresh: boolean): Promise<Response> => {
+    let hdrs: Record<string, string>;
+    try {
+      hdrs = await headers(forceRefresh);
+    } catch (err) {
+      if (err instanceof AuthError && (err.code === "NotSignedIn" || err.code === "NotAuthorizedException")) {
+        throw new SignedOutError();
+      }
+      throw err; // Network trouble reaching Cognito: keep the session, show stale data.
+    }
+    const init: RequestInit = { method, headers: hdrs };
+    if (payload !== undefined) {
+      init.headers = { ...hdrs, "Content-Type": "application/json" };
+      init.body = JSON.stringify(payload);
+    }
+    if (signal !== undefined) init.signal = signal;
+    return fetch(realmUrl(path), init);
+  };
+
+  let res = await attempt(false);
+  if (realm === "family" && (await isGatewayReject(res))) {
+    // Clock skew or a token revoked mid-hour: one forced refresh, then give up.
+    res = await attempt(true);
+    if (await isGatewayReject(res)) {
+      invalidateSession();
+      throw new SignedOutError();
+    }
+  }
+  return unwrap(res);
+}
+
 async function request(path: string, signal?: AbortSignal): Promise<unknown> {
-  const init: RequestInit = { headers: headers() };
-  if (signal !== undefined) init.signal = signal;
-  return unwrap(await fetch(`${baseUrl()}${path}`, init));
+  return send("GET", path, undefined, signal);
 }
 
 async function sendJson(
@@ -127,13 +207,7 @@ async function sendJson(
   payload: unknown,
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const init: RequestInit = {
-    method,
-    headers: { ...headers(), "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  };
-  if (signal !== undefined) init.signal = signal;
-  return unwrap(await fetch(`${baseUrl()}${path}`, init));
+  return send(method, path, payload, signal);
 }
 
 async function postJson(path: string, payload: unknown, signal?: AbortSignal): Promise<unknown> {
@@ -141,9 +215,37 @@ async function postJson(path: string, payload: unknown, signal?: AbortSignal): P
 }
 
 async function deleteRequest(path: string, signal?: AbortSignal): Promise<void> {
-  const init: RequestInit = { method: "DELETE", headers: headers() };
+  await send("DELETE", path, undefined, signal);
+}
+
+// --- sign-in surface ---------------------------------------------------------
+
+export interface AuthConfig {
+  familyLogin: boolean;
+  region: string | null;
+  clientId: string | null;
+}
+
+/** Public, realm-less: the launch screen asks before anyone has signed in. */
+export async function fetchAuthConfig(signal?: AbortSignal): Promise<AuthConfig> {
+  const init: RequestInit = { headers: { Accept: "application/json" } };
   if (signal !== undefined) init.signal = signal;
-  await unwrap(await fetch(`${baseUrl()}${path}`, init));
+  const body = await unwrap(await fetch(`${baseUrl()}/api/auth/config`, init));
+  if (!isRecord(body)) throw new ApiError("Bad auth config", "bad_response", 200);
+  const region = body["region"];
+  const clientId = body["clientId"];
+  return {
+    familyLogin: body["familyLogin"] === true,
+    region: typeof region === "string" ? region : null,
+    clientId: typeof clientId === "string" ? clientId : null,
+  };
+}
+
+/** The current realm's roster; needs no actor, so the screen can pick one from it. */
+export async function fetchMembers(signal?: AbortSignal): Promise<Member[]> {
+  const body = await request("/api/members", signal);
+  const raw = isRecord(body) ? body["members"] : undefined;
+  return Array.isArray(raw) ? raw.map(parseMember).filter((m): m is Member => m !== null) : [];
 }
 
 // --- fixture mode ----------------------------------------------------------
@@ -283,7 +385,7 @@ export async function completeRoutine(
   signal?: AbortSignal,
 ): Promise<Routine> {
   if (usingFixture) {
-    const routine = fixtureCompleteRoutine(id, body.doneOn, body.note, MEMBER_ID);
+    const routine = fixtureCompleteRoutine(id, body.doneOn, body.note, actingMember);
     if (routine === null) throw new ApiError("Routine not found", "not_found", 404);
     return routine;
   }

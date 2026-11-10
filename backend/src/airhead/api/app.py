@@ -20,7 +20,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Annotated, Any
 from zoneinfo import ZoneInfo
 
-from fastapi import Depends, FastAPI, Query, Request, Response
+from fastapi import FastAPI, Query, Request, Response
 from fastapi import status as http_status
 
 from airhead.agenda import build_agenda
@@ -32,7 +32,16 @@ from airhead.api.authz import (
     ensure_may_set_visibility,
     validate_involves,
 )
-from airhead.api.deps import Actor, Events, HouseholdId, Members, Routines, Tz, get_actor
+from airhead.api.deps import (
+    FAMILY_SCOPE_KEY,
+    Actor,
+    Events,
+    HouseholdId,
+    Members,
+    Routines,
+    Tz,
+    get_settings,
+)
 from airhead.api.errors import (
     BadRequest,
     Conflict,
@@ -44,6 +53,7 @@ from airhead.api.errors import (
 from airhead.api.schemas import (
     AgendaDayOut,
     AgendaResponse,
+    AuthConfigOut,
     BusyRowOut,
     ErrorResponse,
     EventCreate,
@@ -248,6 +258,40 @@ app.include_router(agent_router)
 app.include_router(routines_api.router)
 
 
+FAMILY_PREFIX = "/family"
+
+
+class FamilyPrefixMiddleware:
+    """Serve every route twice: `/api/...` is the public demo, `/family/api/...` the
+    private household.
+
+    The prefix is stripped here and recorded in the scope, so routing stays a single
+    table and `deps.get_household_id` makes the realm decision (and the auth check)
+    in one place. Plain ASGI rather than `@app.middleware("http")` because it has to
+    rewrite the path before routing sees it.
+    """
+
+    def __init__(self, inner: Any) -> None:
+        self.inner = inner
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        path = scope.get("path", "")
+        if scope["type"] == "http" and (
+            path == FAMILY_PREFIX or path.startswith(f"{FAMILY_PREFIX}/")
+        ):
+            stripped = path[len(FAMILY_PREFIX) :] or "/"
+            scope = {
+                **scope,
+                "path": stripped,
+                "raw_path": stripped.encode(),
+                FAMILY_SCOPE_KEY: True,
+            }
+        await self.inner(scope, receive, send)
+
+
+app.add_middleware(FamilyPrefixMiddleware)
+
+
 @app.middleware("http")
 async def access_log(request: Request, call_next: Any) -> Response:
     started = time.monotonic()
@@ -258,6 +302,7 @@ async def access_log(request: Request, call_next: Any) -> Response:
         extra={
             "method": request.method,
             "path": request.url.path,
+            "realm": "family" if request.scope.get(FAMILY_SCOPE_KEY) else "demo",
             "status": response.status_code,
             "duration_ms": round((time.monotonic() - started) * 1000, 2),
         },
@@ -282,8 +327,23 @@ def preflight(_path: str) -> Response:
     return Response(status_code=204)
 
 
-# Authenticated, but the roster itself is not visibility-restricted.
-@app.get("/api/members", response_model=MembersResponse, dependencies=[Depends(get_actor)])
+# Unauthenticated on purpose: the launch screen needs it before anyone signs in, and
+# everything in it is public by construction (a region and a secretless SPA client id).
+@app.get("/api/auth/config", response_model=AuthConfigOut)
+def auth_config() -> AuthConfigOut:
+    settings = get_settings()
+    enabled = settings.family_household_id is not None and settings.cognito_client_id is not None
+    return AuthConfigOut(
+        family_login=enabled,
+        region=settings.region if enabled else None,
+        client_id=settings.cognito_client_id if enabled else None,
+    )
+
+
+# Gated by realm (the family roster needs a verified token), but not by actor: the
+# screen reads the roster to *choose* who is acting, so it cannot already need one.
+# The roster itself is not visibility-restricted.
+@app.get("/api/members", response_model=MembersResponse)
 def list_members(members: Members, household_id: HouseholdId) -> MembersResponse:
     return MembersResponse(members=[member_out(m) for m in members.list(household_id)])
 

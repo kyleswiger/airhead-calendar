@@ -1,10 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { fetchAgenda } from "../api";
+import { fetchAgenda, type Realm } from "../api";
 import type { AgendaResponse } from "../types";
 import { parseAgenda } from "../lib/parse";
 
-const CACHE_KEY = "airhead.agenda.v1";
+/**
+ * One cache per realm: the family agenda must never paint on the demo, and
+ * `clearAgendaCache("family")` on sign-out takes it off the device.
+ */
+const cacheKey = (realm: Realm) => `airhead.agenda.v2.${realm}`;
+
+export function clearAgendaCache(realm: Realm): void {
+  try {
+    window.localStorage.removeItem(cacheKey(realm));
+    window.localStorage.removeItem("airhead.agenda.v1"); // pre-realm key
+  } catch {
+    // Nothing to clear.
+  }
+}
 const REFRESH_MS = 5 * 60_000;
 
 export type AgendaStatus = "loading" | "ready" | "error";
@@ -32,9 +45,9 @@ interface CacheEnvelope {
  * instead of an error page. Only a cold start with no cache at all shows an
  * error state.
  */
-function readCache(): { data: AgendaResponse; fetchedAt: number } | null {
+function readCache(realm: Realm): { data: AgendaResponse; fetchedAt: number } | null {
   try {
-    const raw = window.localStorage.getItem(CACHE_KEY);
+    const raw = window.localStorage.getItem(cacheKey(realm));
     if (raw === null) return null;
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null) return null;
@@ -46,16 +59,16 @@ function readCache(): { data: AgendaResponse; fetchedAt: number } | null {
   }
 }
 
-function writeCache(data: AgendaResponse, fetchedAt: number): void {
+function writeCache(realm: Realm, data: AgendaResponse, fetchedAt: number): void {
   try {
     const envelope: CacheEnvelope = { fetchedAt, payload: data };
-    window.localStorage.setItem(CACHE_KEY, JSON.stringify(envelope));
+    window.localStorage.setItem(cacheKey(realm), JSON.stringify(envelope));
   } catch {
     // A full or disabled localStorage must never take the display down.
   }
 }
 
-export function useAgenda(start: string, end: string): AgendaState {
+export function useAgenda(start: string, end: string, realm: Realm): AgendaState {
   const [data, setData] = useState<AgendaResponse | null>(null);
   const [status, setStatus] = useState<AgendaStatus>("loading");
   const [error, setError] = useState<string | null>(null);
@@ -65,13 +78,13 @@ export function useAgenda(start: string, end: string): AgendaState {
 
   // Paint cached data before the first request resolves.
   useEffect(() => {
-    const cached = readCache();
+    const cached = readCache(realm);
     if (cached === null || hasData.current) return;
     hasData.current = true;
     setData(cached.data);
     setFetchedAt(cached.fetchedAt);
     setStatus("ready");
-  }, []);
+  }, [realm]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -87,7 +100,7 @@ export function useAgenda(start: string, end: string): AgendaState {
         setFetchedAt(now);
         setError(null);
         setStatus("ready");
-        writeCache(next, now);
+        writeCache(realm, next, now);
       } catch (err) {
         if (cancelled || controller.signal.aborted) return;
         const message = err instanceof Error ? err.message : "Could not reach the calendar";
@@ -104,7 +117,7 @@ export function useAgenda(start: string, end: string): AgendaState {
       controller.abort();
       window.clearInterval(timer);
     };
-  }, [start, end, nonce]);
+  }, [start, end, nonce, realm]);
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
 

@@ -26,13 +26,13 @@ def seeded():
 class TestAuthShim:
     def test_missing_header_is_401(self, seeded):
         client, _, _ = seeded
-        r = client.get("/api/members")
+        r = client.get("/api/routines")
         assert r.status_code == 401
         assert r.json()["error"]["code"] == "unauthorized"
 
     def test_unknown_member_is_401(self, seeded):
         client, _, _ = seeded
-        r = client.get("/api/members", headers=as_member("mem_nobody"))
+        r = client.get("/api/routines", headers=as_member("mem_nobody"))
         assert r.status_code == 401
 
     def test_healthz_needs_no_auth(self, seeded):

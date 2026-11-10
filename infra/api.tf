@@ -189,3 +189,60 @@ resource "aws_lambda_permission" "agent_api_gw" {
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/*/POST/api/agent/turn"
 }
+
+# --- family sign-in ----------------------------------------------------------
+
+# The private household is the same app under a `/family` prefix, and these routes are
+# the only way in: API Gateway verifies the Cognito access token (signature, expiry,
+# issuer, and client_id against `audience`) before the Lambda runs, then hands the
+# claims over in requestContext.authorizer. The app treats those claims - never a
+# header - as proof of sign-in (airhead.api.deps.get_household_id), so the prefix only
+# selects the realm and this authorizer is the gate.
+resource "aws_apigatewayv2_authorizer" "family" {
+  api_id           = aws_apigatewayv2_api.api.id
+  name             = "${var.project}-family"
+  authorizer_type  = "JWT"
+  identity_sources = ["$request.header.Authorization"]
+
+  jwt_configuration {
+    issuer   = "https://${aws_cognito_user_pool.family.endpoint}"
+    audience = [aws_cognito_user_pool_client.kiosk.id]
+  }
+}
+
+# Explicit methods, not ANY. An ANY route would also match the browser's OPTIONS
+# preflight, and a preflight carries no Authorization header - so the authorizer
+# would 401 it and every family write would die in the browser with a CORS error.
+# OPTIONS falls through to $default, which answers 204 (see app.py `preflight`).
+locals {
+  family_methods = toset(["GET", "POST", "PATCH", "DELETE"])
+}
+
+resource "aws_apigatewayv2_route" "family" {
+  for_each = local.family_methods
+
+  api_id             = aws_apigatewayv2_api.api.id
+  route_key          = "${each.key} /family/{proxy+}"
+  target             = "integrations/${aws_apigatewayv2_integration.api.id}"
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.family.id
+}
+
+# The family twin of agent_turn. Exact match beats `POST /family/{proxy+}`, so turns
+# land on the agent function with its longer timeout and Bedrock grant. Same CORS
+# warning as agent_turn: no OPTIONS route here.
+resource "aws_apigatewayv2_route" "family_agent_turn" {
+  api_id             = aws_apigatewayv2_api.api.id
+  route_key          = "POST /family/api/agent/turn"
+  target             = "integrations/${aws_apigatewayv2_integration.agent.id}"
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.family.id
+}
+
+resource "aws_lambda_permission" "agent_family_api_gw" {
+  statement_id  = "AllowInvokeFamilyAgentTurnFromHttpApi"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.agent.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/*/POST/family/api/agent/turn"
+}

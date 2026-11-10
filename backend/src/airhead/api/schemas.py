@@ -51,6 +51,12 @@ def fmt_local(value: dt.datetime, *, all_day: bool) -> str:
 # --- responses ---------------------------------------------------------------
 
 
+class AuthConfigOut(Wire):
+    family_login: bool
+    region: str | None
+    client_id: str | None
+
+
 class MemberOut(Wire):
     member_id: str
     display_name: str
