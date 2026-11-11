@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/kyleswiger/airhead-calendar/compare/v1.1.0...v1.2.0) (2026-11-10)
+
+
+### Features
+
+* private family sign-in alongside the public demo ([#29](https://github.com/kyleswiger/airhead-calendar/issues/29)) ([81d3db2](https://github.com/kyleswiger/airhead-calendar/commit/81d3db23f0a0492c0357b0b5a87c8849cd365097))
+
 ## [1.1.0](https://github.com/kyleswiger/airhead-calendar/compare/v1.0.0...v1.1.0) (2026-09-27)
 
 
